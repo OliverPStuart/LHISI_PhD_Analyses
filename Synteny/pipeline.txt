@@ -1,0 +1,104 @@
+# Environment
+
+# Local environment
+#HOME_DIR=/Volumes/Alter/LHISI
+#REF_DIR=${HOME_DIR}/References
+#WORKING_DIR=${HOME_DIR}/Analyses/Synteny
+
+# RSB server environment
+HOME_DIR=/home/oliver
+REF_DIR=${HOME_DIR}/References
+WORKING_DIR=${HOME_DIR}/Analyses/Synteny
+
+cd ${WORKING_DIR}
+
+# Get CDS files for all species
+# Must be named as {species}.cds
+
+conda activate jcvi_env
+
+for species in Samer Spice Snite Sgreg Scanc Sseri LHISI Chookeri
+	do
+
+	~/gffread/gffread \
+	-x ${species}.cds  \
+	-g ~/References/${species}_Scaffold_Assembly.fasta \
+	~/References/Annotation/${species}_Scaffold_Assembly.annotation.gff
+
+	# Get bed files from gff files
+	# Must be named as {species}.bed
+
+	# Check in the gff file what the name field is
+	# JCVI instructions specify 'Name' but our gff files may differ
+
+	python -m jcvi.formats.gff bed \
+	--type=mRNA \
+	--key=ID \
+	~/References/Annotation/${species}_Scaffold_Assembly.annotation.gff \
+	-o ${species}.bed \
+	--primary_only
+
+	done
+
+# Now we make some custom config files for later
+
+for hopper in Spice Snite Sgreg Scanc Samer Sseri
+	do
+
+	bioawk -c fastx '$name ~ /NC/ {print $name}' /home/oliver/References/${hopper}_Scaffold_Assembly.fasta | \
+	tr "\n" "," | sed 's/,$/\n/g' > seqids_${hopper}
+
+	done
+
+echo scaffold_{1..18} | tr " " ","  > seqids_Chookeri
+echo Scaffold_{1..17} | tr " " ","  > seqids_LHISI
+
+echo -e "# y, xstart, xend, rotation, color, label, va ,bed" > layout_template
+echo -e ".6,\t.1,\t.8,\t0,\t,\tspecies1,\ttop,\tspecies1.bed" >> layout_template
+echo -e ".4,\t.1,\t.8,\t0,\t,\tspecies2,\tbottom,\tspecies2.bed" >> layout_template
+echo -e "# edges" >> layout_template
+echo -e "e, 0, 1, species1.species2.anchors.simple" >> layout_template
+
+# Run the anchoring
+# No dotplot, since the default option there uses
+# a tex distribution feature we don't have and
+# I cannot be bothered getting Marcin to install it
+
+# For all pairwise comparisons, compare orthologs
+
+# For within-order comparisons, we use default parameters
+# For others, we use more permissive parameters
+
+# The parameters of interest are c-score, which is how 
+
+for species1 in Samer Spice # Snite Sgreg Scanc Sseri LHISI Chookeri
+do
+for species2 in LHISI Chookeri # Samer Spice Snite Sgreg Scanc Sseri 
+do
+
+# Clause to catch comparing species to itself
+if [ ${species1} != ${species2} ]
+then
+
+# Get ortholog anchors and filter
+python -m jcvi.compara.catalog ortholog ${species1} ${species2} --no_strip_names --no_dotplot --cpus 16 --cscore 0.5 --min_size=2
+
+# Assess collinearity
+python -m jcvi.compara.synteny screen --minspan=15 --simple ${species1}.${species2}.anchors ${species1}.${species2}.anchors.new 
+
+# Get seqids file
+cat seqids_${species1} > seqids
+cat seqids_${species2} >> seqids
+
+# Get layout file
+sed "s/species1/${species1}/g" layout_template > layout
+sed -i "s/species2/${species2}/g" layout
+
+# Make plot and rename
+python -m jcvi.graphics.karyotype seqids layout --notex
+mv karyotype.pdf ${species1}_${species2}_karyotype.pdf
+
+fi
+
+done
+done

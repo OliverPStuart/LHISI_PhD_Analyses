@@ -1,0 +1,60 @@
+
+# Local env
+#HOME_DIR = "/Volumes/Alter/LHISI"
+#REF_DIR = HOME_DIR + "/References"
+#ALN_DIR = HOME_DIR + "/Alignments/PacBioCLR"
+#WORKING_DIR = HOME_DIR + "/Analyses/SingleSampleH_PacBio"
+
+# Fisher/Wright env
+HOME_DIR = "/home/oliver"
+REF_DIR = HOME_DIR + "/References"
+ALN_DIR = HOME_DIR + "/Alignments/PacBioCLR"
+WORKING_DIR = HOME_DIR + "/Analyses/SingleSampleH_PacBio"
+
+FINAL = WORKING_DIR + "/Scaffold_PacBio.vcf.gz"
+REGIONS = [line.strip() for line in open(config.get("list") + ".list.txt").readlines()]
+
+rule all:
+  input:
+    FINAL
+
+rule longshot_call:
+  input:
+    REF = REF_DIR + "/LHISI_Scaffold_Assembly.fasta",
+    BAM = ALN_DIR + "/LHISI_PacBio_Scaffold.bam",
+    REGION = WORKING_DIR + "/Scaffold_{SCAFFOLD}.bed"
+  output:
+    WORKING_DIR + "/Scaffold_{SCAFFOLD}_PacBio.vcf"
+  params:
+    OUT_DIR = WORKING_DIR
+  shell:
+    """
+    longshot -A {params.OUT_DIR}/{wildcards.SCAFFOLD}_tmp --region $(cat {input.REGION}) --bam {input.BAM} --ref {input.REF} --out {output}
+    """
+
+rule gzip_vcf:
+  input: WORKING_DIR + "/Scaffold_{SCAFFOLD}_PacBio.vcf"
+  output: WORKING_DIR + "/Scaffold_{SCAFFOLD}_PacBio.vcf.gz"
+  shell:
+    """
+    bgzip {input}
+    """
+
+rule tabix_vcf:
+  input: WORKING_DIR + "/Scaffold_{SCAFFOLD}_PacBio.vcf.gz"
+  output: WORKING_DIR + "/Scaffold_{SCAFFOLD}_PacBio.vcf.gz.tbi"
+  shell:
+    """
+    tabix {input}
+    """
+
+rule concat:
+  input:
+    vcf=expand(WORKING_DIR + "/{SCAFFOLD}_PacBio.vcf.gz", SCAFFOLD=REGIONS),
+    tbi=expand(WORKING_DIR + "/{SCAFFOLD}_PacBio.vcf.gz.tbi", SCAFFOLD=REGIONS)
+  output: WORKING_DIR + "/Scaffold_PacBio.vcf.gz"
+  threads: 18
+  shell:
+    """
+    bcftools concat --threads {threads} -o {output} {input.vcf}
+    """

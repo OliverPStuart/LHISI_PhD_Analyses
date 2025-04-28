@@ -1,0 +1,228 @@
+// Keywords: nonWF, non-Wright-Fisher
+
+initialize() {
+	initializeSLiMModelType("nonWF");
+	defineConstant("K_wild", 300);
+	defineConstant("L", c(0.5,0.99,1)); // mortality for ages up to 3
+	defineConstant("seqLength", 49999999);
+	
+	// only define these if not running on cmd
+	if(exists("slimgui")){
+		// replicate identifier
+		defineConstant("rep",0);
+	}
+	
+	
+	// keep pedigree IDs
+	initializeSLiMOptions(keepPedigrees=T);
+	
+	initializeMutationRate(1e-7);
+	initializeRecombinationRate(1e-8);
+	
+	
+	// TAKEN FROM CKYRIAZIS MOOSE SIMULATIONS	
+	// draw deleterious mutations from Kim 2017 human DFE
+	// and allow for different dominance coefficients for mutations with different s
+	// by creating different mutation types (faster than fitness callbacks)	
+	
+	defineConstant("h_VstrDel", 0.0);
+	defineConstant("h_strDel", 0.01);
+	defineConstant("h_modDel", 0.1);
+	defineConstant("h_wkDel", 0.4);
+	
+	//very strongly deleterious mutations (s<-0.1)
+	initializeMutationType("m1", h_VstrDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x >= -0.1); return x;");
+	//strongly deleterious mutations (s<-0.01)
+	initializeMutationType("m2", h_strDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x < -0.1 | x >= -0.01); return x;");
+	//moderately deleterious mutations (-0.001 > s >= -0.01)
+	initializeMutationType("m3", h_modDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x < -0.01 | x >= -0.001); return x;");
+	//weakly deleterious mutations (s >= -0.001)
+	initializeMutationType("m4", h_wkDel, "s", "do x=rgamma(1,-0.01314833,0.186); while (x < -0.001); return x;");
+	//lethal mutations
+	initializeMutationType("m5", 0.0,"f",-1.0);
+	//neutral mutations
+	initializeMutationType("m6", 0.5,"f",0.0);
+	
+	
+	//g1 is exons and includes all mutation types
+	//m1-m3 are deleterious (nonsynonymous) mutations
+	//ratio of different deleterious mutation types taken from Kim 2017 DFE (sum to 100 below)
+	//assume ratio of deleterious to neutral muts of 2.31:1
+	//giving 100/2.31=43.3 for neutral mutations below
+	initializeGenomicElementType("g1", c(m1,m2,m3,m4,m5,m6), c(2.6, 23.6, 24.7, 49.1, 0.5, 43.3));
+	initializeGenomicElementType("g2", m6, 1);
+	initializeGenomicElementType("g3", m6, 1);
+	
+	// Generate random genes along the chromosome
+	base = 0;
+	nc_length_total = 0;
+	in_length_total = 0;
+	ex_length_total = 0;
+	while (base < seqLength) {
+		// make a non-coding region
+		nc_length = asInteger(runif(1, 1000, 10000)); nc_length_total = nc_length_total + nc_length;
+		initializeGenomicElement(g2, base, base + nc_length - 1);
+		base = base + nc_length;
+		// make first exon
+		ex_length = asInteger(rlnorm(1, log(50), log(2))) + 1; ex_length_total = ex_length_total + ex_length;
+		initializeGenomicElement(g1, base, base + ex_length - 1);
+		base = base + ex_length;
+		// make additional intron-exon pairs
+		do {
+			in_length = asInteger(rlnorm(1, log(100), log(1.5))) + 10; in_length_total = in_length_total + in_length;
+			initializeGenomicElement(g3, base, base + in_length - 1);
+			base = base + in_length;
+			ex_length = asInteger(rlnorm(1, log(50), log(2))) + 1; ex_length_total = ex_length_total + ex_length;
+			initializeGenomicElement(g1, base, base + ex_length - 1);
+			base = base + ex_length;
+		} while (runif(1) < 0.8); // 20% probability of stopping
+	}
+	// final non-coding region
+	nc_length = asInteger(runif(1, 100, 5000));
+	initializeGenomicElement(g2, base, base + nc_length - 1);
+	
+	m1.convertToSubstitution = F; m2.convertToSubstitution = F; m3.convertToSubstitution = F;
+	m4.convertToSubstitution = F; m5.convertToSubstitution = F; m6.convertToSubstitution = F;
+
+}
+
+
+// function to get mutations
+function (i) getMuts(o pop, i sampSize) {
+	
+	sample_pop = sample(pop.individuals, sampSize, F);
+	sample_muts = sample_pop.genomes.mutations.id;
+	return(sample_muts);
+
+}
+
+
+/////////////////
+//// PHASE 1 ////
+//// BURN-IN ////
+/////////////////
+
+// In this phase, we get the Ball's Pyramid population to generate
+// some deleterious mututation load.
+
+
+// Normal reproduction and mortality for the Ball's Pyramid population
+// We actually generate several offspring per individual
+// Most will die off due to fitness scaling
+1:500 reproduction() {
+	
+	for(i in 1:5){
+		
+		subpop.addCrossed(individual, subpop.sampleIndividuals(1));
+	
+	}
+}
+
+
+// At the beginning, add a population of 50 individuals
+// Al set mutations to not disappear from list after fixation
+1 early() {
+	
+	sim.addSubpop("p1", 50);
+
+}
+
+
+// Fitness scaling. Note the use of min() here, this will be useful
+// since it puts a cap on individual fitness gains from carrying
+// capacity e.g. if K = 100 and N = 5, you should not reasonably be
+// made 20 times fitter
+1:500 early() {
+	
+	inds = p1.individuals; ages = inds.age; mortality = L[ages]; survival = 1 - mortality;
+	inds.fitnessScaling = survival;
+	p1.fitnessScaling = min(1.10,K_wild / (p1.individualCount * mean(survival)));
+
+}
+
+
+// And end
+500 late() {
+	
+	// Select the two half-sibs
+	
+	suitable = F;
+	// Search for an individual with a half-sib
+	while( suitable == F ) {
+		
+		// Sample a new individual
+		ind_1 = sample(p1.individuals,1);
+		
+		hits = c();
+		// Loop over the population
+		for(i in 0:(size(p1.individuals)-1)) {
+			
+			// Sample ith individual
+			potential = p1.individuals[i];
+			
+			// Test half-sib and store value
+			// If half-sib, sum(tests) == 1
+			
+			tests = c(potential.pedigreeParentIDs[0] == ind_1.pedigreeParentIDs,
+				potential.pedigreeParentIDs[1] == ind_1.pedigreeParentIDs);
+			
+			if( sum(tests) == 1) val = T; else val = F;
+			
+			hits = c(hits,val);
+		
+		}
+		
+		// Is the sum of half-sib hits > 0
+		if ( sum(hits) > 0 ) {
+			
+			// If so, then ind_1 is suitable
+			suitable = T;
+		
+		
+		}
+	}
+	
+	// Randomly sample a half-sib from the vector of hits
+	ind_2 = sample(p1.individuals[which(hits)],1);
+	
+	// Now calculate heterozygosity for each of these individuals
+	
+	// For each individual, count the number of mutations appearing only once
+	
+	// Get mutation IDs
+	muts = ind_1.genomes.mutations.id;
+	
+	// Empty het value
+	hets = 0;
+	
+	// For each mutation in individual
+	for(mut in 0:(size(muts)-1)) {
+		
+		// If that mutation is only found once
+		
+		if(sum(muts[mut] == muts) == 1) {
+			
+			// Add 1 to the count of heterozygotes
+			hets = hets + 1;
+		
+		}
+	}
+	
+	ind_1_h = hets / 50000000;
+	
+	muts = ind_2.genomes.mutations.id;
+	hets = 0;
+	for(mut in 0:(size(muts)-1)) {
+		if(sum(muts[mut] == muts) == 1) {
+			hets = hets + 1;
+		}
+	}
+	ind_2_h = hets / 50000000;
+	diff = abs(ind_1_h - ind_2_h);
+	
+	cat(rep + "," + ind_1_h + "," + ind_2_h + "\n");
+
+	sim.simulationFinished();
+
+}
+

@@ -1,0 +1,58 @@
+
+HOME_DIR="/home/oliver"
+READ_DIR="/home/oliver/reads"
+GENOMESCOPE_DIR="/home/oliver/genomescope2.0"
+
+# kmc_tools should be compiled from the github.com/tbenavi repository
+# Smudgeplot should be installed and the bin added to path
+
+# This needs to be cleaned up
+# Mostly done on cluster, high memory requirements
+
+# Line to get list of correct files, change as appropriate
+find ${READ_DIR} | grep DTG > FILES
+
+# Make directories
+mkdir kmer{21,23,25,27,29,31}
+
+# Loop over kmers
+for k in 21 23 25 27 29 31
+  do
+
+    # Do counts, put in folder
+    kmc -k${k} -t18 -m64 -ci1 -cs10000 @FILES kmer${k}_omniC kmer${k}
+    mv kmer${k}_omniC* kmer${k}
+
+    # Now go into folder and make histograms for GenomeScope
+    # Use two different max coverage values
+    cd kmer${k}
+    kmc_tools transform kmer${k}_omniC histogram kmer${k}_max1m_omniC.histo -cx1000000
+    kmc_tools transform kmer${k}_omniC histogram kmer${k}_max10k_omniC.histo -cx10000
+
+    # Now loop over these and run GenomeScope
+    for max in 10k 1m
+      do
+        mkdir out_kmer${k}_max${max}
+        Rscript ${GENOMESCOPE_DIR}/genomescope.R -i histos/kmer${k}_max${max}_omniC.histo -o out_kmer${k}_max${max} -k ${k}
+      done
+
+  # Move up
+  cd ..
+
+done
+
+# Now, running Smudgeplot
+# The extraction of kmer pairs is very slow, so only do this once
+# Based on GenomeScope results, a kmer size of 23 is good, using very high coversge kmers is not so important
+
+# Not shown here is the estimation of the upper and lower bounds for kmer coverage as input to Smudgeplot
+# This might be fiddled with... and is based on coverage estimated by GenomeScope, although it might be better to do something different
+
+# Run the kmer count collation
+~/KMC/bin/kmc_tools -t18 transform kmer23/kmer23_omniC -ci${L} -cx${U} reduce kmer23_omniC_${L}_${U}
+# Use the tbenavi/kmc_tools distribution to extract heterozygous kmer pairs
+~/KMC/bin/smudge_pairs kmer23_omniC_${L}_${U} kmer23_omniC_${L}_${U}_coverages.tsv kmer23_omniC_${L}_${U}_pairs.tsv > kmer23_omniC_${L}_${U}_familysizes.tsv
+
+# Now run Smudgeplot with both the estimated haploid coverage from GenomeScope and without
+smudgeplot.py plot -o kmer23_omniC_${L}_${U} -n 18 -t "kmer23_omniC_${L}_${U}_n18" kmer23_omniC_${L}_${U}_coverages.tsv
+smudgeplot.py plot -o kmer23_omniC_${L}_${U} -t "kmer23_omniC_${L}_${U}" kmer23_omniC_${L}_${U}_coverages.tsv

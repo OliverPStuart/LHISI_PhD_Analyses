@@ -1,0 +1,71 @@
+
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+WORKING_DIR=/Volumes/Alter/LHISI/Analyses/PSMC_OmniCVariants
+VAR_DIR=/Volumes/Alter/LHISI/Analyses/OmniCVariantCall_Scaffolded
+
+cd ${WORKING_DIR}
+
+# Take variants from OmniCVariantsCall_Scaffolded
+# We have five filtered datasets for comparison
+
+cp ${VAR_DIR}/Scaffold_OmniC_Filt*vcf ./
+
+# We will also make a new one by doing basic quality filters on the raw file as well as masking the repeats annotated by Dovetail
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.RepeatMasked.gff.gz | cut -f1,4,5 > RepMask.bed
+
+vcftools \
+--vcf ${VAR_DIR}/Scaffold_OmniC_Filt1.vcf \
+--exclude-bed RepMask.bed \
+--recode-INFO-all \
+--recode \
+--out Scaffold_OmniC_RepFilt
+rename 's/\.recode//g' * ; rm *log
+
+# Also a set of only repeat regions
+
+vcftools \
+--vcf ${VAR_DIR}/Scaffold_OmniC_Filt1.vcf \
+--bed RepMask.bed \
+--recode-INFO-all \
+--recode \
+--out Scaffold_OmniC_OnlyRepFilt
+rename 's/\.recode//g' * ; rm *log
+
+# Also copy the fasta reference WITHOUT the sex chromosome scaffold
+
+mawk '!/#/' Scaffold_OmniC_Filt5.vcf  | cut -f1 | uniq > list
+
+seqtk \
+subseq \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta list > LHISI_Scaffold_Assembly.Autosomes.fasta
+
+rm list
+
+# Create consensus fasta with bcftools, incorporating SNPs as IUPAC ambiguities
+
+for prefix in $(ls | grep "vcf$" | cut -d "." -f1)
+do
+
+bgzip ${prefix}.vcf
+
+tabix ${prefix}.vcf.gz
+
+cat LHISI_Scaffold_Assembly.Autosomes.fasta | \
+bcftools consensus -I ${prefix}.vcf.gz > ${prefix}.Consensus.fa
+
+done
+
+# Now, psmc compiles on Linux, so you will need to perform these following steps on a cluster or a linux machine with psmc compiled
+# If you're doing everything on a cluster already then great
+# scp *Consensus* oliver@fisher.rsb.anu.edu.au:/home/oliver/psmcTestOmniC
+# scp Snakefile oliver@fisher.rsb.anu.edu.au:/home/oliver/psmcTestOmniC
+
+# Run the snakefile to parallelise the procedure
+# The snakefile takes the consensus fasta files, converts them to psmc format, runs psmc with default parameters, then plots the final result as an .eps file
+
+conda activate snakemake_env
+snakemake -j 10
+conda deactivate

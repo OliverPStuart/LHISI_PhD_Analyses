@@ -1,0 +1,31 @@
+# What are the minor scaffolds?
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+ALN_DIR=/Volumes/Alter/LHISI/Alignments
+SCRIPT_DIR=/Volumes/Alter/LHISI/Scripts
+WORKING_DIR=${HOME_DIR}/Analyses/MinorScaffoldInvestigation
+
+cd ${WORKING_DIR}
+
+# Extract minor scaffold fastas
+bioawk -c fastx '{print $name}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta | awk 'NR < 18' > majorScaffoldNames
+bioawk -c fastx '{print $name}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta | awk 'NR > 17' > minorScaffoldNames
+seqtk subseq ${REF_DIR}/LHISI_Scaffold_Assembly.fasta minorScaffoldNames > minorScaffold.fasta
+seqtk subseq ${REF_DIR}/LHISI_Scaffold_Assembly.fasta majorScaffoldNames > majorScaffold.fasta
+bioawk -c fastx '{print $name"\t"length($seq)}' minorScaffold.fasta > minorScaffoldLengths
+bioawk -c fastx '{print $name"\t"length($seq)}' majorScaffold.fasta > majorScaffoldLengths
+
+# Map to the major ones, retaining only high quality mappings (>40)
+conda activate minimap2_env
+minimap2 -t3 -x splice majorScaffold.fasta minorScaffold.fasta | awk '$12 > 40' > major2minor_splice.paf
+minimap2 -t3 -x map-hifi majorScaffold.fasta minorScaffold.fasta | awk '$12 > 40' > major2minor_hifi.paf
+minimap2 -t3 -x asm5 majorScaffold.fasta minorScaffold.fasta | awk '$12 > 40' > major2minor_asm5.paf
+minimap2 -t3 -x asm10 majorScaffold.fasta minorScaffold.fasta | awk '$12 > 40' > major2minor_asm10.paf
+minimap2 -t3 -x asm20 majorScaffold.fasta minorScaffold.fasta | awk '$12 > 40' > major2minor_asm20.paf
+conda deactivate
+
+# Make plots of mapping stats
+for file in $(ls | grep "paf\$") ; do Rscript PlottingMapping.R ${file} ; done
+
+# Observe read depth in short reads across the minor scaffolds compared to the major scaffolds........

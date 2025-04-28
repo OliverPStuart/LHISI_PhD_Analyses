@@ -1,0 +1,288 @@
+---
+title: "Sex Chromosome Conservation Plotting"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preamble {.tabset}
+
+This file contains plots from the sex chromosome conservation analysis.
+
+### Environment
+
+```{r class.source = 'fold-show'}
+# Environment
+HOME_DIR="/Volumes/Alter/LHISI"
+WORKING_DIR=paste0(HOME_DIR,"/Analyses/SexChromConservation")
+setwd(WORKING_DIR)
+
+library(circlize)
+library(dplyr)
+library(magrittr)
+```
+
+### Chord diagrams of best hits
+
+In this section are chord diagrams showing the locations of the best hits of the 204 conserved X-linked Timema proteins to various genome assemblies. Note that the length of tracks is NOT representative of the length of that particular scaffold in the respective assembly, rather, it is an indication of the proportion of the Timema X-linked genes that hit that scaffold. All searches were conducted with mmseqs2 easy-search algorithm.
+
+Below we plot the different Schistocerca genome hits. In some, but not all, of these assemblies, the X chromosome scaffold is known, otherwise it will be labelled numerically along with the other scaffolds.
+
+#### Schistocerca seralis cubense
+
+```{r}
+species <- c("Sseri", "Samer", "Scanc", "Sgreg", "Snite", "Spice")
+
+i=1
+# Raw data for species i
+data_raw <- read.table(paste0("best_hits_",species[i],".txt"),header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n()) %>%
+  mutate(Species=species[i])
+colnames(data_filt)[1] <- c("Scaffold")
+
+# Read in tables of assembly information
+tmp <- read.table(paste0(species[i],"_seq_report.txt"),
+                  header=F,comment.char="#",sep="\t")[,c(3,4,5)]
+colnames(tmp) <- c("Molecule","Type","Scaffold")
+tmp$Species <- species[i]
+tmp[] <- lapply(tmp, function(x) gsub("na", "minor", x))
+assign(species[i],tmp)
+rm(tmp)
+    
+tmp <- merge(data_filt,eval(parse(text=species[i])))
+tmp <- data.frame(to="Timema_X",from=tmp$Molecule,value=tmp$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```
+
+#### Schistocerca americana
+
+```{r}
+i=2
+# Raw data for species i
+data_raw <- read.table(paste0("best_hits_",species[i],".txt"),header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n()) %>%
+  mutate(Species=species[i])
+colnames(data_filt)[1] <- c("Scaffold")
+
+# Read in tables of assembly information
+tmp <- read.table(paste0(species[i],"_seq_report.txt"),
+                  header=F,comment.char="#",sep="\t")[,c(3,4,5)]
+colnames(tmp) <- c("Molecule","Type","Scaffold")
+tmp$Species <- species[i]
+tmp[] <- lapply(tmp, function(x) gsub("na", "minor", x))
+assign(species[i],tmp)
+rm(tmp)
+    
+tmp <- merge(data_filt,eval(parse(text=species[i])))
+tmp <- data.frame(to="Timema_X",from=tmp$Molecule,value=tmp$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```
+
+#### Schistocerca cancelatta
+
+```{r}
+i=3
+# Raw data for species i
+data_raw <- read.table(paste0("best_hits_",species[i],".txt"),header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n()) %>%
+  mutate(Species=species[i])
+colnames(data_filt)[1] <- c("Scaffold")
+
+# Read in tables of assembly information
+tmp <- read.table(paste0(species[i],"_seq_report.txt"),
+                  header=F,comment.char="#",sep="\t")[,c(3,4,5)]
+colnames(tmp) <- c("Molecule","Type","Scaffold")
+tmp$Species <- species[i]
+tmp[] <- lapply(tmp, function(x) gsub("na", "minor", x))
+assign(species[i],tmp)
+rm(tmp)
+    
+tmp <- merge(data_filt,eval(parse(text=species[i])))
+tmp <- data.frame(to="Timema_X",from=tmp$Molecule,value=tmp$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```
+
+
+#### Schistocerca gregaria
+
+```{r}
+i=4
+# Raw data for species i
+data_raw <- read.table(paste0("best_hits_",species[i],".txt"),header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n()) %>%
+  mutate(Species=species[i])
+colnames(data_filt)[1] <- c("Scaffold")
+
+# Read in tables of assembly information
+tmp <- read.table(paste0(species[i],"_seq_report.txt"),
+                  header=F,comment.char="#",sep="\t")[,c(3,4,5)]
+colnames(tmp) <- c("Molecule","Type","Scaffold")
+tmp$Species <- species[i]
+tmp[] <- lapply(tmp, function(x) gsub("na", "minor", x))
+assign(species[i],tmp)
+rm(tmp)
+    
+tmp <- merge(data_filt,eval(parse(text=species[i])))
+tmp <- data.frame(to="Timema_X",from=tmp$Molecule,value=tmp$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```
+
+#### Schistocerca nitens
+
+```{r}
+i=5
+# Raw data for species i
+data_raw <- read.table(paste0("best_hits_",species[i],".txt"),header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n()) %>%
+  mutate(Species=species[i])
+colnames(data_filt)[1] <- c("Scaffold")
+
+# Read in tables of assembly information
+tmp <- read.table(paste0(species[i],"_seq_report.txt"),
+                  header=F,comment.char="#",sep="\t")[,c(3,4,5)]
+colnames(tmp) <- c("Molecule","Type","Scaffold")
+tmp$Species <- species[i]
+tmp[] <- lapply(tmp, function(x) gsub("na", "minor", x))
+assign(species[i],tmp)
+rm(tmp)
+    
+tmp <- merge(data_filt,eval(parse(text=species[i])))
+tmp <- data.frame(to="Timema_X",from=tmp$Molecule,value=tmp$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```
+
+#### Schistocerca piceiferons
+
+```{r}
+i=6
+# Raw data for species i
+data_raw <- read.table(paste0("best_hits_",species[i],".txt"),header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n()) %>%
+  mutate(Species=species[i])
+colnames(data_filt)[1] <- c("Scaffold")
+
+# Read in tables of assembly information
+tmp <- read.table(paste0(species[i],"_seq_report.txt"),
+                  header=F,comment.char="#",sep="\t")[,c(3,4,5)]
+colnames(tmp) <- c("Molecule","Type","Scaffold")
+tmp$Species <- species[i]
+tmp[] <- lapply(tmp, function(x) gsub("na", "minor", x))
+assign(species[i],tmp)
+rm(tmp)
+    
+tmp <- merge(data_filt,eval(parse(text=species[i])))
+tmp <- data.frame(to="Timema_X",from=tmp$Molecule,value=tmp$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```
+
+And now we do the two stick insects.
+
+#### Clitarchus hookeri
+
+In Clitarchus hookeri, the X chromosome scaffold is unknown.
+
+```{r}
+# Raw data
+data_raw <- read.table("best_hits_Chookeri.txt",header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n())
+colnames(data_filt)[1] <- c("Scaffold")
+
+data_filt$Molecule <- as.numeric(gsub("scaffold_","",data_filt$Scaffold))
+data_filt <- data_filt[order(data_filt$Molecule),]
+
+tmp <- data.frame(to="Timema_X",from=data_filt$Molecule,value=data_filt$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```
+
+#### Dryococelus australis
+
+In D. australis, Scaffold_4 is the X chromosome.
+
+```{r}
+# Raw data
+data_raw <- read.table("best_hits_LHISI.txt",header=F,stringsAsFactors=F)
+
+# Filter by minimum evalue and max identity
+# Anything left after that, just select random row
+# Then tabulate by scaffold, V2
+data_filt <- data_raw %>% group_by(V1) %>% filter(V11 == min(V11)) %>%
+  filter(V3 == max(V3)) %>% sample_n(1) %>% ungroup() %>% group_by(V2) %>% summarise(Hits=n())
+colnames(data_filt)[1] <- c("Scaffold")
+
+data_filt$Molecule <- as.numeric(gsub("Scaffold_","",data_filt$Scaffold))
+data_filt <- data_filt[order(data_filt$Molecule),]
+
+tmp <- data.frame(to="Timema_X",from=data_filt$Molecule,value=data_filt$Hits)
+chordDiagram(tmp, transparency = 0.3,
+             col=colorRamp2(breaks=tmp$value,
+                            colors=hcl.colors(n=nrow(tmp),
+                                              palette="viridis")),
+             grid.col = "grey")
+```

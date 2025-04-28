@@ -1,0 +1,168 @@
+
+# This script is for processing alignments and identifying potential targets for a PCR diagnostic to sex LHISI nymphs
+# The relevant alignments are the RNA_to_scaffold alignments and the OmniC_to_Scaffold alignments
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=${HOME_DIR}/References
+ALN_DIR=${HOME_DIR}/Alignments
+WORKING_DIR=${HOME_DIR}/Analyses/MolecularSexingTest
+
+# If working on Fisher/Wright
+#
+#HOME_DIR=/home/oliver
+#REF_DIR=${HOME_DIR}/References
+#ALN_DIR=${HOME_DIR}/Alignments
+#WORKING_DIR=${HOME_DIR}/MolecularSexingTest
+
+cd ${WORKING_DIR}
+
+# First, we filter out all the proteins on the sex chromosomes based on Timema X homology
+# We use a reciprocal best hit strategy
+# If a TimemaX protein and a LHISISex genes are each others' best hits, we remove that LHISISex gene
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | \
+awk '$3 == "mRNA" && $1 == "Scaffold_4" {print substr($9,4,11)}' > SexGenes.txt
+
+seqtk subseq ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.protein.fasta.gz SexGenes.txt > SexGenes.fa
+
+makeblastdb -dbtype prot -in ${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa
+makeblastdb -dbtype prot -in SexGenes.fa
+
+blastp -query SexGenes.fa -db    ${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa -outfmt 6 -out SexGenes_to_TimemaX.txt
+blastp -db    SexGenes.fa -query ${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa -outfmt 6 -out TimemaX_to_SexGenes.txt
+
+gzcat ${REF_DIR}//AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | \
+awk '$3 == "gene" && $1 == "Scaffold_4" {print $1"\t"$4-1"\t"$5+1}' > SexGenes.bed
+
+Rscript reciprocalBestHitFinding.R
+
+# Now we use this output to filter the annotated proteins of scaffold 4
+
+gzcat ${REF_DIR}//AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | \
+awk '$1 == "Scaffold_4" && $3 == "gene"' | grep -v -f LHISI_TimemaXHomologs.txt - | awk '{print $1"\t"$4"\t"$5"\t"$9}' > SexGenes.bed
+
+# Then get the depth at all these locations
+
+conda activate mosdepth_env
+
+for SAMPLE in F2 F3 F4 M1 M2 M3 M4
+	do
+	mosdepth \
+	-t 3 \
+	-b SexGenes.bed \
+	-n \
+	-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+	${SAMPLE} \
+	${ALN_DIR}/RNAseq/${SAMPLE}.RNA.SCAFFOLD4.bam
+done
+
+conda deactivate
+
+Rscript coverageAnalysis.R
+
+# This will spit out a list of gene coordinates
+	# No RNA coverage in females, at least some in males
+	# < 20 depth in OmniC coverage
+	# Similarity to a known protein
+
+# Look at IGV to asses these candidates and their local coverage environment, 32 genes
+# From looking at alignments, the three most promising candidates for genes present in males but not females are
+# ANN14888, ANN15514, ANN15516, ANN15624
+
+# So let's get the coordinates for coding sequences of these, extract fastas, and design primers
+# Aim for amplicons 200-300 bases
+
+
+# For positive control loci, i.e. autosome genes, we'll use existing primers
+# We'll map the transcripts corresponding to positive-control loci used for post-capture qPCR
+# Whichever fall inside an autosome can be used a positive control
+
+seqtk subseq ${REF_DIR}/Trinity.fasta positiveControlLoci.txt > positiveControlLoci.fa
+
+conda activate minimap2_env
+
+minimap2 -x splice -o positiveControlLoci_to_scaffold.paf ${REF_DIR}/LHISI_Scaffold_Assembly.fasta positiveControlLoci.fa
+
+conda deactivate
+
+# We are also going to extract the sequence of the original 28S FISH probe region and use that to design primers for a shorter amplicon
+# The location of the sequence in the original contig assembly is NKXL01105718.1:18785-20286
+
+# For the rest of this analysis, sequences were simply extracted by samtools faidx using the mapping coordinates or coordinates from the gff annotation
+# See the PotentialYLinked.xls file for details of all regions tested, primer details, and PCR outcomes
+
+# None of the primers designed for ANN14888, ANN15514, ANN15516, ANN15624 worked
+
+# BLAST GENES TO MAKE SURE ONLY ONE COPY
+# DESIGN FOR EXONS
+
+# A different approach, we'll just target exons of > 300 bp
+# A slightly modified Rscript which does the filtering as above, but removes anything obviously a transposon
+
+gzcat ${REF_DIR}//AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | \
+awk '$1 == "Scaffold_4" && $3 == "gene"' | cut -f9 | grep "transpos\|virus\|mobile\|Transpos\|Virus\|viral\|Viral" | \
+awk '{print substr($1,4,8)}' > ViralLikeOrTransposon.txt
+
+Rscript coverageAnalysis_exon.R
+
+# Now we do the laborious manual process of checking each entry against the RNAseq alignments in IGV
+# We are excluding genes with too much female coverage on either side, within a few kilobases
+# We are also only including loci with obviously delineated exons
+
+# Saved all idx coordinates and locus names to a textfile named ExonTargetCoords.txt
+# Loop over with short script to create a Primer3 input file
+
+sh exonTargetPrimer3Format.sh
+
+# Run this through primer3
+# Then go through the output
+# Keep one primer pair per non-overlapping set of primers per target
+# So if there are multiple primer pairs overlapping exactly in the forward and reverse direction, just pick a random one
+# Then blast all of the potential primers against the reference genome
+# Anything with too many mappings gets thrown out
+
+blastn -db ${REF_DIR}/LHISI_Scaffold_Assembly.fasta -query PotentialYLinkedPrimers.fa -outfmt 6 -out PrimerBlast.txt 
+
+# Now parse this, and see which primers hit multiply, on any scaffold
+# And these pairs are removed from consideration
+
+cut -f1,2 PrimerBlast.txt | sort | uniq -c | sort
+
+# Remove all Y15, Y12, Y23
+# Most of the new ones do work! Fortunately
+# Now it remains to design primers for a housekeeping gene
+# Target needs to be > 300 bp, and also both primers need melting tempreature ~ 70, so ~30 bp
+
+# Let's look for three housekeeping genes: GAPHD, EF1A, alpha-tubulin, in our annotations
+# GAPDH, C. hookeri mRNA from GenBank KF383618.1
+# EF1A, C. hookeri DNA from GenBank EU493036.1 
+# Alpha-Tubulion, L. migratoria complete mRNA from GenBank KP844460.1
+# These are all saved into a file called GenBankRefSeqs.fa
+# We blast them against the genome
+
+blastn \
+-query GenBankRefSeqs.fa \
+-db ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+-outfmt 6 \
+-out RefGenesToGenome.txt
+
+# These all shake out to single locations
+# We use bedtools to merge them, first sorting start/end of hits, then coordinate sorting whole thing
+
+awk '{print $2"\t"$9"\t"$10"\t"$1}' RefGenesToGenome.txt | \
+awk '{if ($2 < $3) print $0 ; else print $1"\t"$3"\t"$2"\t"$4}' | \
+sort -k1,1 | sort -k2,3 -n > tmp.bed
+bedtools merge -d 10000 -i tmp.bed > RefGenesToGenome.bed
+
+# Which are saved into the PotentialYLinked.xlsx spreadsheet
+# Two of these are short regions, so let's extract the coordinates of those regions and design primers
+
+samtools faidx ${REF_DIR}/LHISI_Scaffold_Assembly.fasta Scaffold_12:12927723-12928850 > L_migr_atubulin_1_hit.fa
+samtools faidx ${REF_DIR}/LHISI_Scaffold_Assembly.fasta Scaffold_12:20548409-20549083 > C_hook_ELF1A_hit.fa
+
+# Since this is just two loci, it's fine to use the NCBI primer3 platform
+# Primer details save in the PotentialYLinked.xlsx, primer sequences saved into fasta file: RefSeqPrimers.fa
+
+blastn -db ${REF_DIR}/LHISI_Scaffold_Assembly.fasta -query RefSeqPrimers.fa -outfmt 6 -out PrimerBlastRef.txt
+
+# The alpha tubulin primers have two hits each, this is because the L. migratoria alpha tubulin sequence hits twice

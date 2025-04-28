@@ -1,0 +1,147 @@
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+ALN_DIR=/Volumes/Alter/LHISI/Alignments
+WORKING_DIR=/Volumes/Alter/LHISI/Analyses/OmniCVariantCall_Scaffolded
+
+cd ${WORKING_DIR}
+
+# freebayes_env has freebayes, bioawk, and samtools
+
+conda activate freebayes_env
+
+# Make bed file for major scaffolds
+bioawk -c fastx '{print $name"\t"0"\t"length($seq)-1}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta | head -n 17 > majorScaffolds.bed
+
+# Call variants, max depth of 100 since depth is pretty low
+# Will definitely take a while
+# Easier to run on cluster multithreaded
+freebayes -g 300 -t majorScaffolds.bed \
+-b ${ALN_DIR}/THE2388.bam --use-best-n-alleles 3 \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta > MajorScaffolds_OmniC.vcf
+
+# Data for plotting
+mawk '!/#/ && $6 > 0 && $5 !~ /,/ {print $1"\t"$2"\t"$6"\t"$8"\t"$10}' MajorScaffolds_OmniC.vcf > temp
+cut -f1,2,3 temp > temp1
+cut -f4 temp | cut -d ";" -f1 | sed 's/AB=//g' > temp2
+cut -f4 temp | cut -d ";" -f8 | sed 's/DP=//g' > temp3
+cut -f5 temp | cut -d ":" -f1 > temp4
+cut -f4 temp | cut -d ";" -f41 | sed 's/TYPE=//g' > temp5
+paste temp1 temp2 temp3 temp4 temp5 > VariantData.txt ; rm temp*
+
+Rscript FirstPassPlotting.R
+
+# Isolate heterozygous SNPs, Qual > 0
+# Separate into autosomes and gonosomes
+
+vcffilter -f "QUAL > 0 & TYPE = snp & AC > 0" MajorScaffolds_OmniC.vcf | mawk '/#/ {print} ; !/#/ && $5 !~ /,/ && $10 !~ /1\/1/' > temp
+
+vcftools --vcf temp --chr Scaffold_4 --recode --recode-INFO-all --out MajorScaffolds_OmniC_HetSNPs_Gonosomes
+vcftools --vcf temp --not-chr Scaffold_4 --recode --recode-INFO-all --out MajorScaffolds_OmniC_HetSNPs_Autosomes
+
+rename 's/\.recode//g' * ; rm *log temp
+
+# Now implement a few filters and plot results
+
+# Autosomes
+# Filter out high depth sites with too much quality
+cut -f8 MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf | grep -oe "DP=[0-9]*" | sed -s 's/DP=//g' > AutosomeDepths
+mawk '!/#/' MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf | cut -f1,2,6 > AutosomeQuals
+mawk '{ sum += $1; n++ } END { if (n > 0) print sum / n; }' AutosomeDepths
+# Mean autosomal variant depth in 61.3
+python -c "print (61.3+3*(61.3**0.5))"
+# Upper threshold is 84.8
+paste AutosomeQuals AutosomeDepths | mawk -v x=84.8 '$4 > x' | mawk '$3 < 2 * $4' > AutosomeLowQDLoci
+
+vcffilter -f "DP > 30 & DP < 122.6 & QUAL / DP > 0.25 & QUAL > 30 & AB < 0.7 & AB > 0.3" MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf | mawk '!/#/' | wc -l
+
+# Gonosomes
+cut -f8 MajorScaffolds_OmniC_HetSNPs_Gonosomes.vcf | grep -oe "DP=[0-9]*" | sed -s 's/DP=//g' > GonosomeDepths
+mawk '!/#/' MajorScaffolds_OmniC_HetSNPs_Gonosomes.vcf | cut -f1,2,6 > GonosomeQuals
+mawk '{ sum += $1; n++ } END { if (n > 0) print sum / n; }' GonosomeDepths
+# Mean Gonosomal variant depth in 34.9
+python -c "print (34.9+3*(34.9**0.5))"
+# Upper threshold is 52.6
+paste GonosomeQuals GonosomeDepths | mawk -v x=52.6 '$4 > x' | mawk '$3 < 2 * $4' > GonosomeLowQDLoci
+
+vcffilter -f "DP > 20 & DP < 69.8 & QUAL / DP > 0.25 & QUAL > 30 & AB < 0.7 & AB > 0.3" MajorScaffolds_OmniC_HetSNPs_Gonosomes.vcf | mawk '!/#/' | wc -l
+
+# Still a lot of variants on the gonosome... although some regions will be haploid and some will not
+# But how to tell that?
+
+# To produce final call sets, let's just use a hard min/max depth filter
+# Then the fancy qualByDepth filter from above
+# And then... have several sets with Q > 20, 30, 50, 100, 300
+
+# Start with het_snps on the autosomes
+vcftools --vcf MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf --minDP 30 --maxDP 122.6 --minGQ 20 --minQ 20 --recode --recode-INFO-all --out Scaffold_OmniC_Filt1
+vcftools --vcf MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf --minDP 30 --maxDP 122.6 --minGQ 30 --minQ 30 --recode --recode-INFO-all --out Scaffold_OmniC_Filt2
+vcftools --vcf MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf --minDP 30 --maxDP 122.6 --minGQ 30 --minQ 50 --recode --recode-INFO-all --out Scaffold_OmniC_Filt3
+vcftools --vcf MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf --minDP 30 --maxDP 122.6 --minGQ 30 --minQ 100 --recode --recode-INFO-all --out Scaffold_OmniC_Filt4
+vcftools --vcf MajorScaffolds_OmniC_HetSNPs_Autosomes.vcf --minDP 30 --maxDP 122.6 --minGQ 30 --minQ 300 --recode --recode-INFO-all --out Scaffold_OmniC_Filt5
+
+# Also make a stringently filtered dataset with the gonosome
+vcftools --vcf MajorScaffolds_OmniC_HetSNPs_Gonosomes.vcf --minDP 10 --maxDP 50 --minGQ 30 --minQ 300 --recode --recode-INFO-all --out Scaffold_4_OmniC_Filt
+
+rename 's/\.recode//g' * ; rm *log
+
+# Now plot pi in windows
+for f in $(ls | grep "OmniC_Filt.*.vcf\$") ; do sh hetPlotting.sh ${f} ${REF_DIR}/LHISI_Scaffold_Assembly.fasta 1000000 ; done
+
+
+
+# Let's also write a small section to plot repeat filtered variants
+# This will include scaffold 4, plotting continuous along the length of the genome, rather than faceting#
+# Filtering by LongShot quality and repeats
+
+
+vcftools --vcf MajorScaffolds_OmniC_HetSNPs_Gonosomes.vcf \
+--minDP 10 --maxDP 50 --minGQ 20 --minQ 20 --recode --recode-INFO-all --out MajorScaffolds_OmniC_Gonosomes_filt1
+rename 's/\.recode//g' *
+
+mawk '!/#/' MajorScaffolds_OmniC_Gonosomes_filt1.vcf > temp
+cat Scaffold_OmniC_Filt1.vcf MajorScaffolds_OmniC_Gonosomes_filt1.vcf > All_Scaffolds_OmniC_Filt1.vcf
+rm temp
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.RepeatMasked.gff.gz | \
+cut -f1,4,5 > RepMask.bed
+vcftools \
+--vcf All_Scaffolds_OmniC_Filt1.vcf \
+--exclude-bed RepMask.bed \
+--recode-INFO-all --recode \
+--out temp
+rename 's/\.recode//g' *
+
+
+# We also need to get rid of poorly called sites
+# E.g. those with genotypes ./. and ./1
+awk '/#/ {print $0} ; !/#/ && $10 !~ /\.\/1:/ && $10 !~ /\.\/\.:/ {print $0}' temp.vcf > temp
+mv temp All_Scaffolds_OmniC_Filt1_RepFilt.vcf
+
+bioawk \
+-c fastx \
+'length($seq) > 1000000 {print $name"\t"length($seq)}' \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta > lengths
+
+bedtools \
+makewindows \
+-g lengths \
+-w 1000000 > windows
+
+mawk \
+-v win=1000000 \
+'!/#/ {print $1"\t"$2-1"\t"$2}' All_Scaffolds_OmniC_Filt1_RepFilt.vcf > sites
+
+bedtools \
+intersect \
+-a windows \
+-b sites \
+-c > counts
+
+# Now it remains to get a file of the total unmasked length per window
+# We don't want to just get the H value per window, since much of it is masked
+# So we substract the total masked length in each window from the window length
+
+bedtools intersect -a windows -b RepMask.bed -wo > MaskedWindows.bed 
+
+Rscript ContinuousScaffoldPlotting.R
+

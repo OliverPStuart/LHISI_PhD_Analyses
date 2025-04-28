@@ -1,0 +1,30 @@
+# Looking for NUMTs in the LHISI assembly
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+WORKING_DIR=${HOME_DIR}/Analyses/HuntingForMTScaffold
+cd ${WORKING_DIR}
+
+# First make a local copy doubling the MTgenome
+# It is a circular molecule, so our corresponding scaffold may have overhang
+
+bioawk -c fastx '{print ">"$name"\n"$seq$seq}' ${REF_DIR}/DAusMT.fa > DAusMT_concat.fa
+
+# Now get the minor scaffold fastas and map them to this with minimap2
+
+bioawk -c fastx 'length($seq) < 1000000 {print ">"$name"\n"$seq}' \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta > minorScaffolds.fa
+
+conda activate minimap2_env
+rm scaffold2MT.paf
+minimap2 -t2 DAusMT_concat.fa minorScaffolds.fa > scaffold2MT.paf
+conda deactivate
+
+# It's not there... hmm...
+# What about a blast
+
+makeblastdb -dbtype nucl -in DAusMT_concat.fa -title DAusMT_concat.fa
+blastn -query minorScaffolds.fa -db DAusMT_concat.fa -outfmt 6 > scaf2MT_blast_table.txt
+blastn -query minorScaffolds.fa -db DAusMT_concat.fa > scaf2MT_blast_aln.txt
+
+# Same result

@@ -1,0 +1,114 @@
+# Looking for NUMTs in the LHISI assembly
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References # contains MTdna, NUCdna fasta and blast databases
+WORKING_DIR=${HOME_DIR}/Analyses/HuntingForNUMTs
+cd ${WORKING_DIR}
+
+# Make blast db
+makeblastdb -dbtype nucl -in ${REF_DIR}/LHISI_Scaffold_Assembly.fasta -title LHISI_Scaffold_Assembly.fasta
+
+
+# Now blast, saving both alignment format and the hit table
+# Let's take blast settings from a paper: https://doi.org/10.1093/nar/gks424
+# They suggest that using blast parameters for distant homology is more appropriate to looking for NUMTs
+# They take this intuition from this paper https://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-11-80
+  # +1 for matches
+  # -1 for mismatches
+  # 7 for gap-open penalty
+  # 1 for gap-extension penalty
+
+blastn \
+-query ${REF_DIR}/DAusMT.fa \
+-db ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+-outfmt "6 qseqid sseqid pident length mismatch gaps qstart qend sstart send evalue bitscore evalue " \
+-out MT2NUC.HitTable.out \
+-gapopen 4 -gapextend 1 -penalty -1 -reward 1
+blastn \
+-query ${REF_DIR}/DAusMT.fa \
+-db ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+-out MT2NUC.Alignment.out \
+-gapopen 4 -gapextend 1 -penalty -1 -reward 1
+
+# Reshuffle columns 9 and 10, some hits are in reverse orientation
+# So the sstart field may be larger than the send field, which will confuse bedtools later on
+R
+```R
+d <- read.table("MT2NUC.HitTable.out",header=F,stringsAsFactors=F)
+d <- d[!duplicated(d[,c(1:6)]),]
+temp <- data.frame(start=numeric(),end=numeric())
+for(i in 1:nrow(d)){
+
+temp[i,1] <- min(d[i,c(9,10)])
+temp[i,2] <- max(d[i,c(9,10)])
+
+}
+d$V9 <- temp$start ; d$V10 <- temp$end
+write.table(d,"MT2NUC.HitTable.out",col.names=F,row.names=F,quote=F,sep="\t")
+q()
+n
+```
+
+# Now get the ranges of all the hits, and merge them with bedtools
+awk '$4 > 49' MT2NUC.HitTable.out | cut -f2,9,10 | sort -k1,1 -k2,2n > MT2NUC.bed
+bedtools merge -i MT2NUC.bed -d 1 > MT2NUC.merged.bed
+# Briefly plot the distribution of lengths of these and the locations of the longest ones
+# Also plot the distribution of identity of the matches
+bioawk -c fastx '{print $1"\t"1"\t"length($seq)}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta > contig.lengths.bed
+
+R
+```R
+library(ggbio)
+library(ggExtra)
+library(GenomicRanges)
+data <- read.table("MT2NUC.merged.bed",header=F,stringsAsFactors=F)
+data$V4 <- data$V3-data$V2
+lengths <- read.table("contig.lengths.bed",header=F,stringsAsFactors = F)
+#Subset by contigs with longest features on them
+ctgs <- unique(data[order(data$V4,decreasing=T),]$V1)[1:17]
+data <- data[data$V1 %in% ctgs,]
+lengths <- lengths[lengths$V1 %in% ctgs,]
+#Merge some datasets to order data by contig length
+data <- merge(data,lengths,by="V1")
+data <- data[order(data[,6],data[,2],decreasing=T),]
+#Scrub "ctg" from all names just to clean it up a little
+data$V1 <- gsub("ctg","",data$V1)
+lengths$V1 <- gsub("ctg","",lengths$V1)
+#Make a ranges object with feature ranges
+ranges <- GRanges(seqnames = data$V1,
+                  ranges = IRanges(start=data$V2.x,end=data$V3.x),
+                  strand="+")
+#Attach seqlengths to the ranges object
+for(i in 1:length(names(seqlengths(ranges)))){
+
+  seqlengths(ranges)[i] <- lengths$V3[lengths$V1 == names(seqlengths(ranges))[i]]
+
+}
+values(ranges)$length <- data$V3.x - data$V2.x
+#Basic ideogram
+p1 <- autoplot(ranges, layout = "karyogram",aes(colour=length)) + scale_colour_gradient(trans="log10",low="purple",high="orange") +
+  theme(panel.background=element_blank()) + ggtitle("locations of matches on contigs with 20 longest matches")
+p2 <- ggplot(data,aes(x=V4)) + geom_histogram() + scale_x_continuous(trans="log10") +
+  theme_bw() + labs(x="match length") + ggtitle("histogram of MTdna to NUCdna match lengths")
+
+hits <- read.table("MT2NUC.HitTable.out",header=F,stringsAsFactors=F)
+p3 <- ggplot(hits,aes(x=V3,y=abs(V9-V10))) + geom_point() + labs(x="% identity of hits",y="length of hits") + theme_bw() + scale_y_continuous(trans="log10")
+p3 <- ggMarginal(p3,type="histogram")
+png("match.locations.png",res=300,width=7,height=7,units="in") ; p1 ; dev.off()
+png("match.lengths.png",res=300,width=7,height=7,units="in") ; p2 ; dev.off()
+png("match.lengths.v.ident.png",res=300,width=7,height=7,units="in") ; p3 ; dev.off()
+q()
+n
+```
+
+# The NUMTs are all over, there appears to be two... collections of NUMTs, a larger one and a smaller one
+# The NUMTs all have high identity, looks like a vaguely inverse relationship between identity and length
+# NB: the histograms in two of the figures look different because one is before and one is after merging the match regions for overlap
+
+# Print total length of hit regions, just using the merged bed file
+awk '{print $3-$2}' MT2NUC.merged.bed | awk '{sum+=$1} END {print sum}'
+# 1035798
+# Total length of genome assembly
+awk '{print $3-$2}' contig.lengths.bed | awk '{sum+=$1} END {print sum}'
+# 3421360475
+# Roughly 0.03 % of the genome assembly covered

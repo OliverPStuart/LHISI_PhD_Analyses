@@ -1,0 +1,90 @@
+
+# This script is about manually identifying the sex chromosome contigs
+# And investigating them in terms of OmniC coverage and RNAseq mapping
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=${HOME_DIR}/References
+ALN_DIR=${HOME_DIR}/Alignments
+WORKING_DIR=${HOME_DIR}/Analyses/SexChromManualAssembly
+
+cd ${WORKING_DIR}
+
+# We're going to identify the depth in regions that the pacbio contigs map to
+# Start by getting the sex chromosome pacbio contigs
+# And identifying their coordinates in the final assembly
+# This will allow us to use the old alignment and skip the mapping step
+
+# In the original nomenclature, the sex chromosome scaffold is Scaffold_8
+# We're going to get the contigs that were assembled into the sex chromosome
+# Map them to the final assembly
+# And extract depth information about those regions
+
+# Get the contigs
+
+awk '$1 ~ /Scaffold_8_/ && $6 ~ /SCAF=/{print $6}' ${REF_DIR}/final_assembly.agp | cut -d ";" -f2 > scafs
+grep -f scafs ${REF_DIR}/hic.table.txt | cut -f2 > sexChromContigs.txt ; rm scafs
+
+# Extract them from the original assembly
+
+seqtk subseq ${REF_DIR}/purged.fa sexChromContigs.txt > sexChromContigs.fa
+
+# Now use minimap to map them to the final assembly
+# Filter output for just coordinates
+# In earlier iterations of this pipelines I output the whole alignment and inspected it for completeness
+# But that's unnecessary
+
+conda activate minimap2_env
+minimap2 -x asm5 ${REF_DIR}/LHISI_Scaffold_Assembly.fasta sexChromContigs.fa  | \
+awk '{print $6"\t"$8"\t"$9"\t"$1}' > sexChrom_to_assembly.bed
+conda deactivate
+
+# Now use mosdepth to get average depth at these mapping regions
+# Do this for OmniC and PacBio, just in case
+conda activate mosdepth_env
+
+mosdepth \
+-t 3 \
+-b sexChrom_to_assembly.bed \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly \
+-x sexChromContigs_OmniC \
+${ALN_DIR}/OmniC/THE2388.bam
+
+mosdepth \
+-t 3 \
+-b sexChrom_to_assembly.bed \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly \
+-x sexChromContigs_PacBio \
+${ALN_DIR}/PacBioCLR/LHISI_PacBio_Scaffold.bam
+
+conda deactivate
+
+# Now run an Rscript to analyse the depth distribution of these mapping regions
+
+Rscript plotDepthAtMappingLocations.R
+
+# We're also going to align all OmniC reads to the pacbio assembly and observe the distribution of average read coverage on the contigs
+# The file is called OmniC_to_PacBio.bam, and is sorted and indexed
+# Because of its size, it may not be stored locally
+
+# Make a bedfile of thr sex chromosome contigs
+
+bioawk -c fastx '{print $name"\t0\t"length($seq)-1}' sexChromContigs.fa > sexChromContigs.bed
+bedtools makewindows -b sexChromContigs.bed -w 10000 > sexChromContigs_windows.bed
+
+conda activate mosdepth_env
+
+mosdepth \
+-t 3 \
+-b sexChromContigs_windows.bed \
+-n \
+-f ${REF_DIR}/purged.fa \
+--fast-mode \
+sexChromContigs_OmniC \
+${ALN_DIR}/OmniC_to_PacBio.bam
+
+conda deactivate
+
+Rscript plotContigDepths.R
+
+# Looks like even pacbio contigs show haploid and diploid regions. Although the Y chromosome appears to have a region homologous to the X (based on karyotype) it's probably been shuffled around by transposon/repeat proliferation. Male-only data will probably not be enough for this.
+# 

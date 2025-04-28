@@ -1,0 +1,125 @@
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+ALN_DIR=/Volumes/Alter/LHISI/Alignments
+WORKING_DIR=${HOME_DIR}/Analyses/PacBioVariantCall_Scaffolded
+
+cd ${WORKING_DIR}
+
+# Call variants on all scaffolds, we might use the whole callset later
+# Exclude scaffold 4, this is the sex chromosome and so haploid
+
+# Get bed regions for these
+bioawk -c fastx '{print $name"\t"length($seq)}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta | \
+head -n 17 | awk ' !/Scaffold_4/ {print $1":1-"$2}' > scaffolds.bed
+
+# The following may be run on Fisher or Wright, they're pretty big operations
+# Activate conda environment for longshot
+# Uses a snakemake pipeline since longshot is not parallelised
+
+# Make individual bedfiles and list of regions for input
+rm regions.list.txt
+for f in {1..17}
+do
+bioawk -c fastx -v scaf=${f} 'NR == scaf {print $name":1-"length($seq)}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta > Scaffold_${f}.bed
+echo Scaffold_${f} >> regions.list.txt
+done
+
+conda activate longshot_env
+snakemake -s SnakefileLongshot --config list=regions -j 10
+conda deactivate
+
+# This snakemake pipeline will do all calling and combine files into a single unfiltered master vcf
+# Remove temporary outputs
+rm Scaffold_*_PacBio.vcf*
+
+# Now filter the gonosome and autosomes separately
+vcftools --vcf Scaffold_PacBio.vcf --chr Scaffold_4 --recode --recode-INFO-all --out Scaffold_PacBio_Gonosome
+vcftools --vcf Scaffold_PacBio.vcf --not-chr Scaffold_4 --recode --recode-INFO-all --out Scaffold_PacBio_Autosome
+rename 's/\.recode//g' * ; rm *log
+sh longshotFilt.sh Scaffold_PacBio_Gonosome.vcf 68
+sh longshotFilt.sh Scaffold_PacBio_Autosome.vcf 136
+# And recombine
+bgzip Scaffold_PacBio_Gonosome.vcf.QUAL_FILT.vcf ; tabix Scaffold_PacBio_Gonosome.vcf.QUAL_FILT.vcf.gz
+bgzip Scaffold_PacBio_Autosome.vcf.QUAL_FILT.vcf ; tabix Scaffold_PacBio_Autosome.vcf.QUAL_FILT.vcf.gz
+bcftools concat -o Scaffold_PacBio.QUAL_FILT.vcf Scaffold_PacBio_Gonosome.vcf.QUAL_FILT.vcf.gz Scaffold_PacBio_Autosome.vcf.QUAL_FILT.vcf.gz
+rm *Autosome* *Gonosome*
+
+# Make a table of all variants
+sh tableMaking.sh Scaffold_PacBio.QUAL_FILT.vcf
+
+# Now plot
+# This script plots Scaffold_4 and all others separately
+# Since we know that Scaffold_4 is the sex chromosome
+
+Rscript plotting.R
+
+# It seems like this recommended quality filter does a good job
+# So let's make three autosomal call sets at different stringencies
+	# PASS filter, QUALITY > 136, GQ > 20, AB < 0.8, > 0.2, minDP = 100, maxDP = 180
+	# PASS filter, QUALITY > 136, GQ > 30, AB < 0.8, > 0.2, minDP = 100, maxDP = 180
+	# PASS filter, QUALITY > 136, GQ > 30, AB < 0.7, > 0.2, minDP = 100, maxDP = 180
+# Also make a callset for the gonosome using this last strict filter
+
+sh callsetMaking.sh
+
+# Now, we'll plot pi in windows along the chromosome
+
+for f in $(ls | grep "PacBio_Filt.*.vcf\$") ; do sh hetPlotting.sh ${f} ${REF_DIR}/LHISI_Scaffold_Assembly.fasta 1000000 ; done
+
+# Let's also write a small section to plot repeat filtered variants
+# This will include scaffold 4, plotting continuous along the length of the genome, rather than faceting#
+# Filtering by LongShot quality and repeats
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.RepeatMasked.gff.gz | \
+cut -f1,4,5 > RepMask.bed
+vcftools \
+--vcf Scaffold_PacBio.QUAL_FILT.vcf \
+--exclude-bed RepMask.bed \
+--recode-INFO-all --recode \
+--out Scaffold_PacBio.QUALREP_FILT
+rename 's/\.recode//g' *
+
+bioawk \
+-c fastx \
+'length($seq) > 1000000 {print $name"\t"length($seq)}' \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta > lengths
+
+bedtools \
+makewindows \
+-g lengths \
+-w 1000000 > windows
+
+mawk \
+-v win=1000000 \
+'!/#/ {print $1"\t"$2-1"\t"$2}' Scaffold_PacBio.QUALREP_FILT.vcf > sites
+
+bedtools \
+intersect \
+-a windows \
+-b sites \
+-c > counts
+
+# Now it remains to get a file of the total unmasked length per window
+# We don't want to just get the H value per window, since much of it is masked
+# So we substract the total masked length in each window from the window length
+
+bedtools intersect -a windows -b RepMask.bed -wo > MaskedWindows.bed 
+
+# We also want depth, for which we use mosdepth
+# We'll use PacBio here, and the following code can be run on Fisher
+
+conda activate mosdepth_env
+
+mosdepth \
+-b windows \
+-t 19 \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+PacBio_Scaffold_1M \
+${ALN_DIR}/LHISI_PacBio_Scaffold.bam
+
+conda deactivate
+
+# Plotting script
+
+Rscript ContinuousScaffoldPlotting.R

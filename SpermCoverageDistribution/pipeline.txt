@@ -1,0 +1,102 @@
+# Observing distribution of coverage from sperm reads
+
+HOME_DIR=/home/oliver
+REF_DIR=${HOME_DIR}/References
+ALN_DIR=${HOME_DIR}/Alignments
+READ_DIR=${HOME_DIR}/Reads/Sperm
+SCRIPT_DIR=${HOME_DIR}/Scripts
+WORKING_DIR=${HOME_DIR}/Analyses/SpermCoverageDistribution
+
+cd ${HOME_DIR}
+
+# Align short reads
+# We have a Snakefile for this
+# All it requires is a list of the sample names in the read directory called "sperm_sample_list.txt"
+
+# We run alignment from the home directory
+# It's just easier that way
+
+conda activate bwa_env
+
+ls ${READ_DIR} | cut -d "_" -f1,2 | sort | uniq > sperm_sample_list.txt
+
+snakemake -s {SCRIPT_DIR}/SnakefileAlignmentSperm --cores 20
+
+conda deactivate
+
+# This alignment will take a long time, these are big read files
+
+# Now get coverage info from all scaffolds
+
+cd ${ALN_DIR}/Sperm
+
+echo -e "Scaffold\tLength\tReads\tSample" >> coverage_stats_sperm.txt
+
+for sample in $(ls | grep bam$ | sed 's/\.bam//g')
+do
+samtools idxstats ${sample}.bam | \
+awk -v SAMPLE=${sample} '{print $1"\t"$2"\t"$3"\t"SAMPLE}' | \
+awk 'NR>1 {print last} {last=$0}' >> coverage_stats_sperm.txt
+done
+
+mv coverage_stats_sperm.txt ${WORKING_DIR}/coverage_stats_sperm.txt
+
+# We also do this for the adult WGS data for comparison
+# Basically comparing somatic versus germline tissue
+
+cd {ALN_DIR}/WGS
+
+echo -e "Scaffold\tLength\tReads\tSample" >> coverage_stats_adult.txt
+
+for sample in $(ls | grep bam$ | sed 's/\.bam//g')
+do
+samtools idxstats ${sample}.bam | \
+awk -v SAMPLE=${sample} '{print $1"\t"$2"\t"$3"\t"SAMPLE}' | \
+awk 'NR>1 {print last} {last=$0}' >> coverage_stats_adult.txt
+done
+
+mv coverage_stats_adult.txt ${WORKING_DIR}/coverage_stats_adult.txt
+
+# Now run the Rscript to visualise all of this
+
+cd ${WORKING_DIR}
+Rscript plotting_raw_coverage.R
+
+# Now move back into the sperm read directory and run mosdepth for all samples
+
+cd ${ALN_DIR}/Sperm
+
+conda activate mosdepth_env
+
+echo -e "Scaffold\tStart\tEnd\tCoverage\tSample" >> spatial_coverage_sperm.txt
+
+for sample in $(ls | grep bam$ | sed 's/\.bam//g')
+do
+
+# Run mosdepth
+mosdepth \
+-t 20 \
+-b 100000 \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+${sample} \
+${ALN_DIR}/Sperm/${sample}.bam
+
+# Paste output into a text file
+zcat ${sample}.regions.bed.gz | awk -v SAMPLE=${sample} '{print $0"\t"SAMPLE}' >> spatial_coverage_sperm.txt
+
+done
+
+conda deactivate
+
+rm *regions* *mosdepth*
+mv spatial_coverage_sperm.txt ${WORKING_DIR}/spatial_coverage_sperm.txt
+
+# Now plot 
+
+cd ${WORKING_DIR}
+
+Rscript plot_spatial_coverage.R 
+
+### The only noticeable thing that jumps out here is that in the sperm samples, there is way higher coverage in the minor scaffolds relative to the major scaffolds
+### So the sperm libraries are much richer in repeat content than the libraries made from adult soma

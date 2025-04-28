@@ -1,0 +1,326 @@
+# Looking for the sex chromosome among the scaffolds
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+ALN_DIR=/Volumes/Alter/LHISI/Alignments
+SCRIPT_DIR=/Volumes/Alter/LHISI/Scripts
+WORKING_DIR=${HOME_DIR}/Analyses/HuntingForSexChroms
+
+cd ${WORKING_DIR}
+
+# Calculate the coverage (raw and GC normalised) on all scaffolds
+# The one with less coverage than the others should be the sex chromosome
+# Start with a bedfile of regions, 10000kb non-overlapping windows on the 17 major scaffolds
+
+bioawk \
+-c fastx \
+'length($seq) > 1000000 {print $name"\t"length($seq)}' \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta > scaffoldLengths.txt
+
+bedtools makewindows \
+-g scaffoldLengths.txt \
+-w 10000 > scaffoldWindows.bed
+
+# Get average read depth in those regions for both pacbio and OmniC
+
+conda activate mosdepth_env
+
+mosdepth \
+-b scaffoldWindows.bed \
+-t 18 \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+PacBio_Scaffold \
+${ALN_DIR}/LHISI_PacBio_Scaffold.bam
+
+mosdepth \
+-b scaffoldWindows.bed \
+-t 18 \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+OmniC_Scaffold \
+${ALN_DIR}/THE2388.bam
+
+# Since OmniC are short reads, also filter by mapping quality
+# See what the effect of repetitive regions on short reads is
+
+mosdepth \
+-b scaffoldWindows.bed \
+-t 18 \
+-Q 60 \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+OmniC_Scaffold_Q60 \
+${ALN_DIR}/THE2388.bam
+
+conda deactivate
+
+# Get GC in those regions
+
+bedtools nuc \
+-fi ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+-bed scaffoldWindows.bed > scaffoldGC.txt
+
+# Now paste them together and use R to analyse them, only 340000 rows data.frame, should be fine
+
+awk "NR > 1" scaffoldGC.txt | cut -f1-5 > temp1
+gzcat PacBio_Scaffold.regions.bed.gz | cut -f4 > temp2
+paste temp1 temp2 > PacBio_scaffoldGCandDepth.txt
+rm temp* ; rm PacBio_Scaffold*
+
+awk "NR > 1" scaffoldGC.txt | cut -f1-5 > temp1
+gzcat OmniC_Scaffold.regions.bed.gz | cut -f4 > temp2
+paste temp1 temp2 > OmniC_scaffoldGCandDepth.txt
+
+awk "NR > 1" scaffoldGC.txt | cut -f1-5 > temp1
+gzcat OmniC_Scaffold_Q60.regions.bed.gz | cut -f4 > temp2
+paste temp1 temp2 > OmniC_scaffoldGCandDepth_Q60.txt
+rm temp* ; rm OmniC_Scaffold* 
+
+# Now let's map phasmid rDNA sequences to the assembly
+# The file contains all phasmid 18S and 28S sequences in GenBank
+QUERY=GenBankPhasmid_rDNA.fasta
+
+conda activate minimap2_env
+
+minimap2 \
+-t2 \
+-x splice \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+${QUERY} > rDNA2scaffold.paf
+
+conda deactivate
+
+# Which scaffolds do these map to primarily, only high quality mapping
+awk '/tp:A:P/ && $12 >= 60 {print $6}' rDNA2scaffold.paf | sort | uniq -c
+# 4 is the most common
+awk '/tp:A:P/ && $7 < 1000000 {print $6}' rDNA2scaffold.paf | sort | uniq -c
+# Some scaffolds definitely seem to be collapsed rDNA repeats from somewhere
+
+# Map rDNA sequences to only scaffold 4
+
+echo Scaffold_4 > scaffold4Name
+seqtk subseq \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+scaffold4Name > Scaffold4.fasta
+
+conda activate minimap2_env
+
+minimap2 \
+-t2 \
+-x splice \
+Scaffold4.fasta \
+${QUERY} > rDNA2scaffold4.paf
+
+conda deactivate
+
+# Find all unique mapping positions and merge overlaps, allowing 1000 bp distance between positions
+
+awk '$12 >= 60' rDNA2scaffold4.paf | cut -f6,8,9 | sort | uniq | sort -n -k2,3 > temp
+
+bedtools merge \
+-d 1000 \
+-i temp > rDNA2scaffold4_mappingPositions.bed
+rm temp
+
+wc -l rDNA2scaffold4_mappingPositions.bed
+
+# Now get average read depth and GC at these positions according to the alignments, as above
+
+conda activate mosdepth_env
+
+mosdepth \
+-t 2 \
+-b rDNA2scaffold4_mappingPositions.bed \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+PacBio_rDNA2scaffold4_depths \
+${ALN_DIR}/PacBioCLR/LHISI_PacBio_Scaffold.bam
+
+mosdepth \
+-t 2 \
+-b rDNA2scaffold4_mappingPositions.bed \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+OmniC_rDNA2scaffold4_depths \
+${ALN_DIR}/OmniC/THE2388.bam
+
+mosdepth \
+-t 2 \
+-Q 60 \
+-b rDNA2scaffold4_mappingPositions.bed \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+OmniC_rDNA2scaffold4_depths_Q60 \
+${ALN_DIR}/OmniC/THE2388.bam
+
+conda deactivate
+
+# Now get the GC at these positions
+
+bedtools nuc \
+-fi ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+-bed rDNA2scaffold4_mappingPositions.bed > scaffold4GC.txt
+
+awk "NR > 1" scaffold4GC.txt | cut -f1-5 > temp1
+gzcat PacBio_rDNA2scaffold4_depths.regions.bed.gz | cut -f4 > temp2
+paste temp1 temp2 > PacBio_scaffold4GCandDepth.txt ; rm temp*
+
+awk "NR > 1" scaffold4GC.txt | cut -f1-5 > temp1
+gzcat OmniC_rDNA2scaffold4_depths.regions.bed.gz | cut -f4 > temp2
+paste temp1 temp2 > OmniC_scaffold4GCandDepth.txt
+
+awk "NR > 1" scaffold4GC.txt | cut -f1-5 > temp1
+gzcat OmniC_rDNA2scaffold4_depths_Q60.regions.bed.gz | cut -f4 > temp2
+paste temp1 temp2 > OmniC_scaffold4GCandDepth_Q60.txt
+
+rm temp* ; rm *rDNA2scaffold*
+
+# Now do a whole lot of plotting
+
+Rscript GCnormAndDepthPlotting.R
+Rscript rDNAdepthPlotting.R
+
+# We also have a list of X-linked genes (AA sequences) identified in scaffold assemblies of five Timema species, courtesy of Darren Parker (and Tanja Schwander)
+# We can blast these against the LHISI scaffold assembly
+# Where do they fall? Can they help us identify the X chromosome?
+# Blasting takes a while here, since it's a tblastn and it searches all reading frames
+
+makeblastdb \
+-dbtype nucl \
+-in ${REF_DIR}/LHISI_Scaffold_Assembly.fasta
+
+tblastn \
+-db ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+-query ${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa \
+-out Timema_X_to_LHISI.txt \
+-outfmt "6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore"
+
+# How many of the orthologues show up in this blast?
+cut -f1 Timema_X_to_LHISI.txt | sort | uniq | wc -l
+grep ">" ${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa | wc -l
+
+# How many at different levels of e-value stringency?
+
+for cutoff in 0.01 0.001 0.0001 0.00001 0.000001 0.0000001 0.00000001
+do echo "cutoff=${cutoff}" ; awk -v cutoff=${cutoff} '$13 < cutoff' Timema_X_to_LHISI.txt | cut -f1 | sort | uniq | wc -l ; done
+
+# How many are on Scaffold_4
+awk '$2 == "Scaffold_4"' Timema_X_to_LHISI.txt | cut -f1 | sort | uniq | wc -l
+
+# After selecting the highest quality ones, what is the distribution of the hits along the chromosomes?
+# Here, we filter with an Rsript, which also plots the distribution of hit identities on the different scaffolds
+
+Rscript Timema_X_Best_Hit_Filtering.R
+
+# The output table is called Timema_X_Best_Hits.txt, we also get a bed file which is passed to mosdepth to get depths
+
+# How many of the best hits are on Scaffold_4?
+awk '$2 == "Scaffold_4"' Timema_X_Best_Hits.txt | cut -f1 | sort | uniq | wc -l
+
+# Get depths at these regions
+
+conda activate mosdepth_env
+
+mosdepth \
+-t 2 \
+-b Timema_X_Best_Hits.bed \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+PacBio_TimemaXtoScaffold \
+${ALN_DIR}/PacBioCLR/LHISI_PacBio_Scaffold.bam
+
+mosdepth \
+-t 2 \
+-Q 60 \
+-b Timema_X_Best_Hits.bed \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+OmniCQ60_TimemaXtoScaffold \
+${ALN_DIR}/OmniC/THE2388.bam
+
+conda deactivate
+
+rm *mosdepth* *csi
+
+# Now plot the locations of these hits along all chromosomes
+# As well as the location of these hits along the depth distribution of Scaffold_4
+
+RScript Timema_X_Best_Hit_Plotting.R
+
+# We got Dovetail to reassemble the contigs, to a point prior to the final joins
+# Let's try and re-do this Timema blast analysis with this different reference
+
+makeblastdb \
+-dbtype nucl \
+-in ${REF_DIR}/SexChromReAssembly/LHISI_Scaffold_Assembly_ReAssembly.fasta
+
+tblastn \
+-db ${REF_DIR}/SexChromReAssembly/LHISI_Scaffold_Assembly_ReAssembly.fasta \
+-query ${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa \
+-out Timema_X_to_LHISI_ReScaffold.txt \
+-outfmt "6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore"
+
+# How many of the orthologues show up in this blast?
+cut -f1 Timema_X_to_LHISI_ReScaffold.txt | sort | uniq | wc -l
+grep ">" ${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa | wc -l
+
+# How many at different levels of e-value stringency?
+
+for cutoff in 0.01 0.001 0.0001 0.00001 0.000001 0.0000001 0.00000001
+do echo "cutoff=${cutoff}" ; awk -v cutoff=${cutoff} '$13 < cutoff' Timema_X_to_LHISI_ReScaffold.txt | cut -f1 | sort | uniq | wc -l ; done
+
+# How are they distributed across the scaffolds
+cut -f2 Timema_X_to_LHISI_ReScaffold.txt | sort | uniq -c | sort
+
+# After selecting the highest quality ones, what is the distribution of the hits along the chromosomes?
+# Here, we filter with an Rsript, which also plots the distribution of hit identities on the different scaffolds
+
+Rscript Timema_X_Best_Hit_Filtering_ReScaffold.R
+
+# The output table is called Timema_X_Best_Hits_ReScaffold.txt, we also get a bed file which is passed to mosdepth to get depths
+
+# How many of the best hits are on Scaffold_4?
+cut -f2 Timema_X_Best_Hits_ReScaffold.txt | sort | uniq -c | sort
+
+# Are the top scoring ones the ones that got assembled into the sex chromosome?
+# 424, 450,280, and 350
+# Yes, they are, ands they get ~ 60 % of the hits as before
+
+# An extra thing we're doing is looking at the masked and unmasked regions of the genome
+# Does removing repeat masked regions fix the OmniC depth issue
+
+# Get a bed file of masked regions on major scaffolds
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.RepeatMasked.gff.gz | cut -f1,4,5 > RepMask.bed
+cut -f1 RepMask.bed | cut -d "_" -f2 > Scafs
+paste RepMask.Bed Scafs | awk '$4 < 18 {print $1"\t"$2"\t"$3}' > RepMask_Major.bed
+rm RepMask.bed
+
+# Get a bed file of the major scaffolds
+bioawk -c fastx 'length($seq) > 1000000 {print $name"\t0\t"length($seq)-1}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta > LHISI_Scaffold_Assembly_Major.bed
+
+# Subtract one from the other to get the inverse
+bedtools subtract -a LHISI_Scaffold_Assembly_Major.bed -b RepMask_Major.bed > RepMask_Major_Inverse.bed
+
+conda activate mosdepth_env
+
+mosdepth \
+-t 2 \
+-b RepMask_Major.bed \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+OmniC_RepMask \
+${ALN_DIR}/OmniC/THE2388.bam
+
+mosdepth \
+-t 2 \
+-b RepMask_Major_Inverse.bed \
+-n \
+-f ${REF_DIR}/LHISI_Scaffold_Assembly.fasta \
+OmniC_RepMask_Inverse \
+${ALN_DIR}/OmniC/THE2388.bam
+
+conda deactivate
+
+# Plotting them shows no difference, so... oh well.

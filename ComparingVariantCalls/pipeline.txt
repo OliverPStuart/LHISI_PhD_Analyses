@@ -1,0 +1,77 @@
+### Comparing the variant calls made by OmniC and PacBio
+### Starting with very coarse resolution, do the sites overlap?
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+WORKING_DIR=/Volumes/Alter/LHISI/Analyses/ComparingVariantCalls
+
+cd ${WORKING_DIR}
+
+### Start by getting lists of sites for each call set
+
+PACBIO=${HOME_DIR}/Analyses/PacBioVariantCall_Scaffolded
+OMNIC=${HOME_DIR}/Analyses/OmniCVariantCall_Scaffolded
+
+for path in $(find .. | grep "/Scaffold.*.Filt.*.vcf\$")
+	do
+	name=$(echo ${path} | rev | cut -d "/" -f1 | rev | sed 's/\.vcf//g')
+	mawk '!/#/' ${path} | cut -f1,2 > ${name}_Sites.txt
+	done
+
+### Now compare them all and put values in a table
+### The pacbio files are the columns in this table
+
+# First column with omnic names
+echo "PacBioFile" > col1
+ls | grep "OmniC" | cut -d "_" -f2,3 >> col1
+echo "total_pacbio" >> col1
+
+# Now loop over pacbio files, with loop over omnic files inside
+for pacbio in $(ls | grep "PacBio")
+	do
+	echo ${pacbio} | cut -d "_" -f2,3 > col${pacbio}
+		for omnic in $(ls | grep "OmniC")
+		do
+		comm -12 <(sort ${pacbio}) <(sort ${omnic}) | wc -l >> col${pacbio}
+		done
+	cat ${pacbio} | wc -l >> col${pacbio}
+	done
+
+echo "total_omnic" > colomnic
+for omnic in $(ls | grep "OmniC")
+	do
+	cat ${omnic} | wc -l >> colomnic
+	done
+
+paste col1 colScaffold_PacBio* colomnic > VariantOverlapTable.txt
+rm col*
+
+# Now we calculate per chromosome heterozygosity for all callsets and compare them
+# We only need a table of counts of variants for each chromosome for each file
+
+# Lengths
+bioawk -c fastx 'length($seq) > 1000000 {print $name"\t"length($seq)}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta > scaffoldLengths.txt
+
+# OmniC table
+echo -e "Scaffold\tOmniCFilt1\tOmniCFilt2\tOmniCFilt3\tOmniCFilt4\tOmniCFilt5" > temp
+mawk '!/#/' Scaffold_OmniC_Filt5_Sites.txt | cut -f1 | uniq > col1
+for f in $(ls | grep "Scaffold_OmniC.*Sites.txt\$")
+	do
+	mawk '!/#/' ${f} | cut -f1 | uniq -c | cut -d " " -f1 > col${f}
+	done
+cat temp <(paste col1 colS*) > OmniC_Het_Table.txt
+rm col* temp
+
+# PacBio table
+echo -e "Scaffold\tPacBioFilt1\tPacBioFilt2\tPacBioFilt3" > temp
+mawk '!/#/' Scaffold_PacBio_Filt1_Sites.txt | cut -f1 | uniq > col1
+for f in $(ls | grep "Scaffold_PacBio.*Sites.txt\$")
+	do
+	mawk '!/#/' ${f} | cut -f1 | uniq -c | cut -d " " -f1 > col${f}
+	done
+cat temp <(paste col1 colS*) > PacBio_Het_Table.txt
+rm col* temp
+
+# Now use custom Rscript to plot
+
+Rscript comparingVariantHet.R

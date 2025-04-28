@@ -1,0 +1,112 @@
+# Analysing the TE landscape in the LHISI genome
+# We start with a RepeatModeler library that Dovetail built for us
+# Renamed to D_australis-families.fa
+# Kept in the AnnotationPackage folder in References
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+WORKING_DIR=${HOME_DIR}/Analyses/TELandscape
+
+cd ${WORKING_DIR}
+
+# Start by separating out known and unknown TEs
+# Following procedure in https://bmcecolevol.biomedcentral.com/articles/10.1186/s12862-018-1324-9
+# If they match a known TE protein or domain, leave it in as unknown TE
+# If they match an actual functions eukaryotic gene, remove in
+# If they do not match anything... remove
+
+cp ${REF_DIR}/Annotation/LHISI_Scaffold_Assembly.repeats_unfiltered.fasta ./
+grep 'Unknown' LHISI_Scaffold_Assembly.repeats_unfiltered.fasta | \
+sed 's/>//g' > UnknownAnnotations.txt
+seqtk subseq ${REF_DIR}/Annotation/LHISI_Scaffold_Assembly.repeats_unfiltered.fasta UnknownAnnotations.txt > UnknownAnnotations.fa
+
+# BLAST unnkown families
+
+blastn -remote -db nt -query UnknownAnnotations.fa -out UnknownAnnotationBlast.txt -outfmt "6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore stitle" > UnknownAnnotationBlast.txt
+
+# Get the best hit for each TE family
+# Then randomly sample one line for those with multiple best hits
+# They will invariably be the same type of hit
+
+sort -k1,1 -k13,13g UnknownAnnotationBlast.txt | awk '!a[$1] {a[$1] = $13} $13 == a[$1]' > tmp
+shuf tmp | awk '{count[$1]++} {if (count[$1] < 2) print $0}' tmp | cut -f1,15 > BestHits.txt
+rm tmp
+
+# Separate this into four lists
+# Those which are actually tranposons, just unknown
+# keywords.txt is taken from https://bmcecolevol.biomedcentral.com/articles/10.1186/s12862-018-1324-9
+
+grep -if keywords.txt BestHits.txt | \
+grep -vi "chromosome\|assembly" | \
+cut -f1 > Unknown_Transposon.txt
+
+# Those which are proteins
+grep "rotei\|ranscri" BestHits.txt | cut -f1 > Unknown_Protein.txt
+
+# Those which are probably mitochondrial pseudogenes
+grep itochondri BestHits.txt | cut -f1 > Unknown_Mitochondrial.txt
+
+# Those which are actually unknown, just random hits to other assemblies
+# Everything remaining is just unknown
+cat Unknown_* > Unknown_Known.txt
+
+cut -f1 BestHits.txt > tmp
+grep -vif Unknown_Known.txt tmp > Unknown_Unknown.txt
+
+# Get names of all families
+
+bioawk -c fastx '{print $name}' LHISI_Scaffold_Assembly.repeats_unfiltered.fasta > FamilyNames.txt
+
+# Now, we have lists of all unknowns of different types
+# We can remove mitochondrial pseudogenes and proteins from this
+
+# Get list of families
+cat Unknown_Mitochondrial.txt Unknown_Protein.txt > remove
+
+# Inverse search this on list of all families
+
+grep -vif remove FamilyNames.txt | cut -d " " -f1 > ToKeep.txt
+
+# Now get the fasta file of just the TE families we care about
+
+seqtk subseq LHISI_Scaffold_Assembly.repeats_unfiltered.fasta ToKeep.txt > ${REF_DIR}/Annotation/LHISI_Scaffold_Assembly.repeats_filtered.fasta
+
+# Now run repeat masker, on both filtered and unfiltered repeats
+
+conda activate repeatmasker_env
+
+cp ${REF_DIR}/LHISI_Scaffold_Assembly.fasta FilteredRepeats
+RepeatMasker -e rmblast -parallel 20 -lib $REF_DIR/Annotation/LHISI_Scaffold_Assembly.repeats_filtered.fasta FilteredRepeats
+mv FilteredRepeats UnfilteredRepeats
+RepeatMasker -e rmblast -parallel 20 -lib $REF_DIR/Annotation/LHISI_Scaffold_Assembly.repeats_unfiltered.fasta UnfilteredRepeats
+
+conda deactivate
+
+rm UnfilteredRepeats
+
+# Now use the output to calculate Kimura 2 parameter distances
+# If running in conda environment, then calcDivergenceFromAlign.pl will be in ~/miniconda2/envs/repeatmasker_env/share/RepeatMasker/util
+# MUST specify this directory, not the conda environment bin, to which the script is symlinked
+
+#SCRIPT_DIR=~/RepeatMasker/util
+SCRIPT_DIR=~/miniconda2/envs/repeatmasker_env/share/RepeatMasker/util
+
+perl ${SCRIPT_DIR}/calcDivergenceFromAlign.pl -noCpGMod -s FilteredRepeats.divsum -a FilteredRepeats.align.noCpG FilteredRepeats.cat.gz
+perl ${SCRIPT_DIR}/calcDivergenceFromAlign.pl -noCpGMod -s UnfilteredRepeats.divsum -a UnfilteredRepeats.align.noCpG UnfilteredRepeats.cat.gz
+
+# Then import file into R to plot. Don't let the software do it for you
+
+# Now get the files and plot the % masked along the chromosomes, like before, but with different classes
+
+# First make a .out file into a table easier to manipulate
+ 
+awk 'NR>3' UnfilteredRepeats.out | \
+sed -e 's/  */ /g' | \
+sed 's/ /\t/g' | \
+sed 's/^\t//g' > UnfilteredRepeats_table.txt
+
+awk 'NR>3' FilteredRepeats.out | \
+sed -e 's/  */ /g' | \
+sed 's/ /\t/g' | \
+sed 's/^\t//g' > FilteredRepeats_table.txt
+

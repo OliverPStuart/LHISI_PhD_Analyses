@@ -1,0 +1,261 @@
+# These analyses are about where diversity persists in the genome
+# We take a set of variant calls from the OmniC variants and observe their distribution
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+WORKING_DIR=/Volumes/Alter/LHISI/Analyses/AnalysingDiversityDistribution_OmniCVariants
+VAR_DIR=/Volumes/Alter/LHISI/Analyses/OmniCVariantCall_Scaffolded
+
+cd ${WORKING_DIR}
+
+# Copy the variants and reference (minus Scaffold_4) into here
+
+cp ${VAR_DIR}/Scaffold_OmniC_Filt5.vcf ./
+
+bioawk -c fastx 'length($seq) > 1000000 && $name != "Scaffold_4" {print ">"$name"\n"$seq}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta > LHISI_Autosomes.fasta 
+
+# First let's filter this by repeat annotation
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.RepeatMasked.gff.gz | \
+awk 'NR > 3 {print $1"\t"$4-1"\t"$5-1}' > repeatMask.bed
+
+vcftools \
+--vcf Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--exclude-bed repeatMask.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.REP_FILT
+rename 's/\.recode//g' * ; rm *log
+
+# And plot along the scaffolds in 500kb windows
+
+for f in Scaffold_OmniC_Filt5.REP_FILT.vcf Scaffold_OmniC_Filt5.vcf 
+	do
+	sh hetPlotting.sh ${f} LHISI_Autosomes.fasta 500000
+done
+
+# So it looks like removing repeats does not remove high diversity regions, so they are not easily explained by misassembly artefacts
+
+# Now let's examine the diversity in regions inside and outside of various annotation classes
+# We sum the number of heterozygous sites in each class then divide by the length of the class
+# For CDS, exons, introns, and UTRs of genes, we are only looking at a subset of the annotated genes
+# The ones that can actually be identified and not of viral/tranposon origin
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | \
+awk '$3 == "gene"' | \
+grep -v "unknown\|viral\|virus\|transpos" | \
+cut -f9 | cut -d ";" -f1 | sed 's/ID=//g' > protsOfInterest.txt
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | \
+grep -f protsOfInterest.txt - > protsOfInterest.gff
+
+## Exons
+
+awk '$3 == "exon" {print $1"\t"$4"\t"$5"\t"substr($9,4,8)}' protsOfInterest.gff > exon.bed
+
+vcftools \
+--vcf Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--bed exon.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.exon
+rename 's/\.recode//g' * ; rm *log
+
+mawk '!/#/' Scaffold_OmniC_Filt5.exon.vcf | cut -f1 | uniq -c | rev | cut -d " " -f2 | rev | sed "s/ //g" > t1
+for f in 1 2 3 5 6 7 8 9 10 11 12 13 14 15 16 17
+do
+awk -v scaf=Scaffold_${f} ' $1 == scaf {sum+=($3-$2)} END {print scaf"\texon\t"sum}' exon.bed >> t2
+done
+paste t2 t1 >> het_split_by_site_class.txt
+rm t1 t2
+
+## Introns
+# A custom script is written for this which iterates over the protsOfInterest.gff file
+# For each gene, get the interval for the whole gene and subtract exons and UTRs
+
+sh getIntron.sh
+
+vcftools \
+--vcf Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--bed intron.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.intron
+rename 's/\.recode//g' * ; rm *log
+
+mawk '!/#/' Scaffold_OmniC_Filt5.intron.vcf | cut -f1 | uniq -c | rev | cut -d " " -f2 | rev | sed "s/ //g" > t1
+for f in 1 2 3 5 6 7 8 9 10 11 12 13 14 15 16 17
+do
+awk -v scaf=Scaffold_${f} ' $1 == scaf {sum+=($3-$2)} END {print scaf"\tintron\t"sum}' intron.bed >> t2
+done
+paste t2 t1 >> het_split_by_site_class.txt
+rm t1 t2
+
+## CDS
+
+awk '$3 == "CDS" {print $1"\t"$4"\t"$5"\t"substr($9,4,8)}' protsOfInterest.gff > CDS.bed
+
+vcftools \
+--vcf Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--bed CDS.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.CDS
+rename 's/\.recode//g' * ; rm *log
+
+mawk '!/#/' Scaffold_OmniC_Filt5.CDS.vcf | cut -f1 | uniq -c | rev | cut -d " " -f2 | rev | sed "s/ //g" > t1
+for f in 1 2 3 5 6 7 8 9 10 11 12 13 14 15 16 17
+do
+awk -v scaf=Scaffold_${f} ' $1 == scaf {sum+=($3-$2)} END {print scaf"\tCDS\t"sum}' CDS.bed >> t2
+done
+paste t2 t1 >> het_split_by_site_class.txt
+rm t1 t2
+
+## Non-coding regions, including and excluding repetitive
+## Take this as the complement of all regions in the original GFF
+## Effectively removing viral/tranposon origin proteins from consideration
+# Including repetitive
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | \
+awk '$3 == "gene" {print $1"\t"$4"\t"$5}' > allCodingRegions.bed
+
+bioawk -c fastx '{print $name"\t0\t"length($seq)-1}' LHISI_Autosomes.fasta > wholeGenome.bed
+
+bedtools subtract -a wholeGenome.bed -b allCodingRegions.bed > nonCoding_plusRep.bed
+
+vcftools \
+--vcf Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--bed nonCoding_plusRep.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.nonCoding_plusRep
+rename 's/\.recode//g' * ; rm *log
+
+mawk '!/#/' Scaffold_OmniC_Filt5.nonCoding_plusRep.vcf | cut -f1 | uniq -c | rev | cut -d " " -f2 | rev | sed "s/ //g" > t1
+for f in 1 2 3 5 6 7 8 9 10 11 12 13 14 15 16 17
+do
+awk -v scaf=Scaffold_${f} ' $1 == scaf {sum+=($3-$2)} END {print scaf"\tnonCoding_plusRep\t"sum}' nonCoding_plusRep.bed >> t2
+done
+paste t2 t1 >> het_split_by_site_class.txt
+rm t1 t2
+
+# Excluding repetitive
+# Simply subtract the repetitive bed file from the nonCoding bedfile
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.RepeatMasked.gff.gz | \
+awk 'NR > 3 {print $1"\t"$4"\t"$5}' > repeatRegions.bed
+
+bedtools subtract -a nonCoding_plusRep.bed -b repeatRegions.bed > nonCoding_minusRep.bed
+
+vcftools \
+--vcf Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--bed nonCoding_minusRep.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.nonCoding_minusRep
+rename 's/\.recode//g' * ; rm *log
+
+mawk '!/#/' Scaffold_OmniC_Filt5.nonCoding_minusRep.vcf | cut -f1 | uniq -c | rev | cut -d " " -f2 | rev | sed "s/ //g" > t1
+for f in 1 2 3 5 6 7 8 9 10 11 12 13 14 15 16 17
+do
+awk -v scaf=Scaffold_${f} ' $1 == scaf {sum+=($3-$2)} END {print scaf"\tnonCoding_minusRep\t"sum}' nonCoding_minusRep.bed >> t2
+done
+paste t2 t1 >> het_split_by_site_class.txt
+rm t1 t2
+
+# Now we have an Rscript to plot all of these
+# Each type of region is plotted as a point estimate, one per scaffold
+
+Rscript plotHetClasses.R
+
+# Now let's look at specific regions of high heterozygosity that are not explained by repeats
+# What is in them? 
+
+# Two different approaches are taken
+# In the first we just observe SNPs that are inside the coordinates of the genes
+# We look at genes with many SNPs, basically > 1
+
+awk 'awk $3 == "gene" {print $1"\t"$4"\t"$5"\t"substr($9,4,8)}' protsOfInterest.gff > protsOfInterest.bed
+mawk -v win=${WIN} '!/#/ {print $1"\t"$2-1"\t"$2}' Scaffold_OmniC_Filt5.vcf > sites
+bedtools intersect -a protsOfInterest.bed -b sites -c | awk '$5 > 0' > genesWithSNPs.txt
+
+# In the second we intersect the genes within 100kb windows and observe the place of these windows in the distribution of pi across the bins
+# So we obtain a bedfile with the number of heterozygotes in each bin at 500 kb intervals
+
+bioawk -c fastx '{print $name"\t"length($seq)}' LHISI_Autosomes.fasta > lengths
+bedtools makewindows -g lengths -w 500000 > windows
+mawk '!/#/ {print $1"\t"$2-1"\t"$2}' Scaffold_OmniC_Filt5.vcf > sites
+bedtools intersect -a windows -b sites -c > 500kb_variant_counts.txt
+rm windows lengths sites
+
+# And we use an Rscript for plotting
+# Three plots are made
+	# 1. A dot plot of position vs. pi with the locations of genes as vertical lines
+	# 2. A histogram of pi with the pi at the position of genes as vertical lines
+	# 3. The same histogram but only the positions of putative immunity genes as lines
+# None show anything interesting
+
+# Now we're going to analyse the distribution of variant types
+# e.g. are they synonymous, non-synonymous, etc. Obviously this is only relevant to SNPs in genes
+# We have prebuilt a snpEff database, under the name LHISI, using the GFF file, protein, transcript, and genome fasta files
+
+mkdir snpEff_basic ; cd snpEff_basic
+java -jar ~/snpEff/snpEff.jar eff LHISI ../Scaffold_OmniC_Filt5.vcf > Scaffold_OmniC_Filt5.SNPEFF.vcf
+cd ..
+
+# This gives us a table with the tally of types of variants per gene
+# So we start with an Rscript to plot this
+
+Rscript snpEffTablePlot.R
+
+# We're also going to do the same with only genes of interest
+
+mkdir snpEff_protsOfInterest ; cd snpEff_protsOfInterest
+
+vcftools \
+--vcf ../Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--bed ../protsOfInterest.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.protsOfInterest
+rename 's/\.recode//g' * ; rm *log
+
+java -jar ~/snpEff/snpEff.jar eff LHISI Scaffold_OmniC_Filt5.protsOfInterest.vcf > Scaffold_OmniC_Filt5.protsOfInterest.SNPEFF.vcf
+
+cd ..
+
+# It is curious that we see such a low Ts/Tv ratio
+# This is suspicious
+# If it's an artefact, it means that the variant calling is not very accurate
+# If it's real it might indicate extremely relaced selection
+
+# What if we only look at predicted genes with low annotation edit distance
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | awk '$3 == "mRNA"' | cut -f9 | cut -d ";" -f4 | sed 's/_.*=//g' > AED
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | awk '$3 == "mRNA"' > mRNAs
+paste AED mRNAs | awk '$1 < 0.5' | cut -f10 | cut -d ";" -f1 | sed 's/ID=//g' | sed 's/-RA//g' > HighQualityAnnotations.txt
+rm AED mRNAs
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.annotation.gff.gz | awk '$3 == "gene"' | grep -f HighQualityAnnotations.txt - | cut -f1,4,5,9 > HighQualityAnnotations.bed
+
+mkdir snpEff_HighQualityAnnotations ; cd snpEff_HighQualityAnnotations
+
+vcftools \
+--vcf ../Scaffold_OmniC_Filt5.vcf \
+--not-chr Scaffold_4 \
+--bed ../HighQualityAnnotations.bed \
+--recode \
+--recode-INFO-all \
+--out Scaffold_OmniC_Filt5.HighQualityAnnotations
+rename 's/\.recode//g' * ; rm *log
+
+java -jar ~/snpEff/snpEff.jar eff LHISI Scaffold_OmniC_Filt5.HighQualityAnnotations.vcf > Scaffold_OmniC_Filt5.HighQualityAnnotations.SNPEFF.vcf
+
+cd ..
+
+# No effect on patterns, it is across the whole dataset

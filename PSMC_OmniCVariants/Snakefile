@@ -1,0 +1,43 @@
+
+callsets = ["Filt1","Filt2","Filt3","Filt4","Filt5"]
+outputs = ["psmc","eps","par"]
+
+results_pattern = "Scaffold_OmniC_{callset}.Consensus.{output}"
+results = expand(results_pattern,callset=callsets,output=outputs)
+
+rule all:
+  input:
+    results
+
+rule fa2psmc:
+  input:
+    "Scaffold_OmniC_{callset}.Consensus.fa"
+  output:
+    "Scaffold_OmniC_{callset}.Consensus.psmcfa"
+  shell:
+    """
+    /home/oliver/psmc/utils/fq2psmcfa {input} > {output}
+    """
+
+rule psmc:
+  input:
+    "Scaffold_OmniC_{callset}.Consensus.psmcfa"
+  output:
+    "Scaffold_OmniC_{callset}.Consensus.psmc"
+  shell:
+    """
+    /home/oliver/psmc/psmc -N25 -t15 -r5 -p "4+25*2+4+6" -o {output} {input}
+    """
+
+rule plot:
+  input:
+    "Scaffold_OmniC_{callset}.Consensus.psmc"
+  output:
+    "Scaffold_OmniC_{callset}.Consensus.eps",
+    "Scaffold_OmniC_{callset}.Consensus.par"
+  shadow: "full"
+  shell:
+    """
+    /home/oliver/psmc/utils/psmc2history.pl {input} | /home/oliver/psmc/utils/history2ms.pl > ms-cmd.sh
+    /home/oliver/psmc/utils/psmc_plot.pl Scaffold_OmniC_{wildcards.callset}.Consensus {input}
+    """

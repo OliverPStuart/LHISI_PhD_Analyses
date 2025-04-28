@@ -1,0 +1,81 @@
+# We have several grasshopper assemblies with X chromosomes
+# We know that Timema and Drycocelus share much of their X chromosome content
+# How far back does this go?
+
+# Local env
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=${HOME_DIR}/References
+WORKING_DIR=${HOME_DIR}/Analyses/SexChromConservation
+
+
+# Fisher env
+#HOME_DIR=/home/oliver
+#REF_DIR=${HOME_DIR}/References
+#WORKING_DIR=${HOME_DIR}/Analyses/SexChromConservation
+
+cd ${WORKING_DIR}
+
+conda activate mmseqs2_env
+
+for SPECIES in Sseri Spice Sgreg Scanc Samer Snite Chookeri LHISI
+do
+
+# Make databases
+
+mmseqs createdb ${REF_DIR}/${SPECIES}_Scaffold_Assembly.fasta ${SPECIES}_DB
+mmseqs createindex ${SPECIES}_DB S{SPECIES}_INDEX
+
+# Search for proteins therein
+
+#mmseqs easy-search  \
+#${HOME_DIR}/Data/Timema_X_soft_HOG_longest_aa.fa \
+#${SPECIES}_DB ${SPECIES}_out ${SPECIES} \
+#--search-type 2
+
+# Tabulate and filter results
+# Sort by lowest Evalue
+# Super useful code here to select lowest by group in awk
+# $1 is the grouping column, $13 is the value column
+awk '
+    NR == FNR {
+        if (!($1 in min) || $11 < min[$1])
+            min[$1] = $11
+        next
+    }
+    $11 == min[$1]
+' ${SPECIES}_out ${SPECIES}_out > best_hits_${SPECIES}.txt
+
+done
+
+# The best_hits_${SPECIES}.txt are all filtered individually by the plotting script, plotting.Rmd
+
+# Now, we get counts of pairwise sharing of genes on X chromosome
+# Is the retention random or non-random?
+# If it is non-random, then the timema X genes on each species' sex chromosomes should mostly be shared
+
+# For this we use Chookeri, LHISI, Samer, Sgreg, and Spice
+# These are the species where the sex chromosome can be confidently identified
+
+awk '$2 == "scaffold_2" {print $1}' best_hits_Chookeri.txt > Chookeri_sex_hits
+awk '$2 == "Scaffold_4" {print $1}' best_hits_LHISI.txt > LHISI_sex_hits
+awk '$2 == "CM038257.1" {print $1}' best_hits_Spice.txt > Spice_sex_hits
+awk '$2 == "CM043609.1" {print $1}' best_hits_Sgreg.txt > Sgreg_sex_hits
+awk '$2 == "CM038245.1" {print $1}' best_hits_Samer.txt > Samer_sex_hits
+
+# In Schistocerca, the X linked genes are shared between two chromosomes
+# So how much of those that hit this chromosome are also on the phasmid X chromosome?
+
+awk '$2 == "CM038253.1" {print $1}' best_hits_Spice.txt > Spice_supp_hits
+awk '$2 == "CM043605.1" {print $1}' best_hits_Sgreg.txt > Sgreg_supp_hits
+awk '$2 == "CM038241.1" {print $1}' best_hits_Samer.txt > Samer_supp_hits
+
+# And what if we combine those? 
+
+awk '$2 == "CM038253.1" || $2 == "CM038257.1" {print $1}' best_hits_Spice.txt > Spice_both_hits
+awk '$2 == "CM043605.1" || $2 == "CM043609.1" {print $1}' best_hits_Sgreg.txt > Sgreg_both_hits
+awk '$2 == "CM038241.1" || $2 == "CM038245.1" {print $1}' best_hits_Samer.txt > Samer_both_hits
+
+Rscript venn_diagram_plotting.R
+rm *log
+
+# Now, an alluvial plot linking the genes to various genomes

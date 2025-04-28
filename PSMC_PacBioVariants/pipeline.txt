@@ -1,0 +1,96 @@
+
+
+HOME_DIR=/Volumes/Alter/LHISI
+REF_DIR=/Volumes/Alter/LHISI/References
+WORKING_DIR=/Volumes/Alter/LHISI/Analyses/PSMC_PacBioVariants
+VAR_DIR=/Volumes/Alter/LHISI/Analyses/PacBioVariantCall_Scaffolded
+
+cd ${WORKING_DIR}
+
+# Take variants from PacBioVariantCall_Scaffolded
+# We will take all three filtered call sets and compare them
+# Also use the call set filtered based on the LongShot recommendations
+
+cp ${VAR_DIR}/Scaffold_PacBio_Filt*vcf ./
+
+vcftools \
+--vcf ${VAR_DIR}/Scaffold_PacBio.QUAL_FILT.vcf \
+--not-chr Scaffold_4 \
+--remove-indels \
+--recode \
+--recode-INFO-all \
+--out Scaffold_PacBio_LongShotFilt
+
+rename 's/\.recode//g' * ; rm *log
+
+# Also create a file filtered with the repeat mask provided by Dovetail
+# Also including basic quality filters
+
+gzcat ${REF_DIR}/AnnotationPackage/PO1996_Dryococelus_australis.RepeatMasked.gff.gz | cut -f1,4,5 > RepMask.bed
+
+vcftools \
+--vcf ${VAR_DIR}/Scaffold_PacBio_Filt1.vcf \
+--exclude-bed RepMask.bed \
+--recode-INFO-all \
+--recode \
+--out Scaffold_PacBio_RepFilt
+rename 's/\.recode//g' * ; rm *log
+
+# Also take ONLY the repeat regions
+
+vcftools \
+--vcf ${VAR_DIR}/Scaffold_PacBio_Filt1.vcf \
+--bed RepMask.bed \
+--recode-INFO-all \
+--recode \
+--out Scaffold_PacBio_OnlyRepFilt
+rename 's/\.recode//g' * ; rm *log
+
+# Also copy the fasta reference WITHOUT the sex chromosome scaffold
+
+bioawk \
+-c fastx \
+'length($seq) > 1000000 {print $name}' ${REF_DIR}/LHISI_Scaffold_Assembly.fasta | \
+grep -v Scaffold_4 > list
+
+seqtk \
+subseq \
+${REF_DIR}/LHISI_Scaffold_Assembly.fasta list > LHISI_Scaffold_Assembly.Autosomes.fasta
+
+rm list
+
+# Create consensus fasta with bcftools, incorporating SNPs as IUPAC ambiguities
+
+for prefix in $(ls | grep "vcf$" | cut -d "." -f1)
+do
+
+bgzip ${prefix}.vcf
+
+tabix ${prefix}.vcf.gz
+
+cat LHISI_Scaffold_Assembly.Autosomes.fasta | \
+bcftools consensus -I ${prefix}.vcf.gz > ${prefix}.Consensus.fa
+
+done
+
+# Now, psmc compiles on Linux, so you will need to perform these following steps on a cluster or a linux machine with psmc compiled
+# If you're doing everything on a cluster already then great
+# scp *Consensus* oliver@fisher.rsb.anu.edu.au:/home/oliver/psmcTestPacBio
+# scp Snakefile oliver@fisher.rsb.anu.edu.au:/home/oliver/psmcTestPacBio
+
+# Convert to psmc format
+
+for prefix in $(ls | grep "fa$" | cut -d "." -f1,2)
+do
+
+/home/oliver/psmc/utils/fq2psmcfa \
+${prefix}.fa > ${prefix}.psmcfa
+
+done
+
+# Run the snakefile to parallelise the procedure
+
+conda activate snakemake_env
+snakemake -j 10
+conda deactivate
+
